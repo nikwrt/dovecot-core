@@ -60,11 +60,9 @@ void imap_client_auth_result(struct client *client,
 		memset(&url, 0, sizeof(url));
 		url.userid = reply->destuser;
 		url.auth_type = client->auth_mech_name;
-		url.host_name = reply->host;
-		if (reply->port != 143) {
-			url.have_port = TRUE;
+		url.host.name = reply->host;
+		if (reply->port != 143)
 			url.port = reply->port;
-		}
 		str_append(referral, "REFERRAL ");
 		str_append(referral, imap_url_create(&url));
 
@@ -113,7 +111,7 @@ imap_client_auth_begin(struct imap_client *imap_client, const char *mech_name,
 	char *prefix;
 
 	prefix = i_strdup_printf("%d%s",
-			imap_client->client_ignores_capability_resp_code,
+			imap_client->client_ignores_capability_resp_code ? 1 : 0,
 			imap_client->cmd_tag);
 
 	i_free(imap_client->common.master_data_prefix);

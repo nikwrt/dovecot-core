@@ -54,14 +54,15 @@ const char *t_str_lcase(const char *str);
 const char *t_str_ucase(const char *str);
 
 /* Trim matching chars from either side of the string */
+const char *t_str_trim(const char *str, const char *chars);
+const char *p_str_trim(pool_t pool, const char *str, const char *chars);
 const char *str_ltrim(const char *str, const char *chars);
 const char *t_str_ltrim(const char *str, const char *chars);
+const char *p_str_ltrim(pool_t pool, const char *str, const char *chars);
 const char *t_str_rtrim(const char *str, const char *chars);
-/*const char *t_str_trim(const char *str, const char *chars);*/
+const char *p_str_rtrim(pool_t pool, const char *str, const char *chars);
 
 int null_strcmp(const char *s1, const char *s2) ATTR_PURE;
-int bsearch_strcmp(const char *key, const char *const *member) ATTR_PURE;
-int bsearch_strcasecmp(const char *key, const char *const *member) ATTR_PURE;
 int i_memcasecmp(const void *p1, const void *p2, size_t size) ATTR_PURE;
 int i_strcmp_p(const char *const *p1, const char *const *p2) ATTR_PURE;
 int i_strcasecmp_p(const char *const *p1, const char *const *p2) ATTR_PURE;
@@ -105,16 +106,6 @@ char *p_array_const_string_join(pool_t pool, const ARRAY_TYPE(const_string) *arr
 				const char *separator);
 #define t_array_const_string_join(arr, separator) \
 	((const char *)p_array_const_string_join(unsafe_data_stack_pool, arr, separator))
-
-/* FIXME: v2.3 - sort and search APIs belong into their own header, not here */
-#include "sort.h"
-
-#define i_bsearch(key, base, nmemb, size, cmp) \
-	bsearch(key, base, nmemb, size + \
-		CALLBACK_TYPECHECK(cmp, int (*)(typeof(const typeof(*key) *), \
-						typeof(const typeof(*base) *))), \
-		(int (*)(const void *, const void *))cmp)
-
 
 /* INTERNAL */
 char *t_noalloc_strdup_vprintf(const char *format, va_list args,

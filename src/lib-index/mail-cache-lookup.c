@@ -313,7 +313,7 @@ static int mail_cache_seq(struct mail_cache_view *view, uint32_t seq)
 
 	if (++view->cached_exists_value == 0) {
 		/* wrapped, we'll have to clear the buffer */
-		buffer_reset(view->cached_exists_buf);
+		buffer_set_used_size(view->cached_exists_buf, 0);
 		view->cached_exists_value++;
 	}
 	view->cached_exists_seq = seq;
@@ -608,4 +608,48 @@ int mail_cache_lookup_headers(struct mail_cache_view *view, string_t *dest,
 			pool_unref(&pool);
 	} T_END;
 	return ret;
+}
+
+const char *
+mail_cache_get_missing_reason(struct mail_cache_view *view, uint32_t seq)
+{
+	uint32_t offset, reset_id;
+
+	if (MAIL_CACHE_IS_UNUSABLE(view->cache))
+		return "Cache file is unusable";
+
+	offset = mail_cache_lookup_cur_offset(view->view, seq, &reset_id);
+	if (offset != 0) {
+		if (view->cache->hdr->file_seq != reset_id) {
+			return t_strdup_printf(
+				"Index reset_id=%u doesn't match cache reset_id=%u",
+				reset_id, view->cache->hdr->file_seq);
+		}
+		return t_strdup_printf(
+			"Mail has other cached fields, reset_id=%u", reset_id);
+	}
+
+	/* find the newest mail that has anything in cache */
+	for (; seq > 0; seq--) {
+		offset = mail_cache_lookup_cur_offset(view->view, seq, &reset_id);
+		if (offset != 0)
+			break;
+	}
+	if (seq == 0) {
+		return t_strdup_printf("Cache file is empty, reset_id=%u",
+				       view->cache->hdr->file_seq);
+	}
+
+	uint32_t uid;
+	mail_index_lookup_uid(view->view, seq, &uid);
+
+	if (view->cache->hdr->file_seq != reset_id) {
+		return t_strdup_printf(
+			"Mail not cached, highest cached seq=%u uid=%u: "
+			"Index reset_id=%u doesn't match cache reset_id=%u",
+			seq, uid, reset_id, view->cache->hdr->file_seq);
+	}
+	return t_strdup_printf(
+		"Mail not cached, highest cached seq=%u uid=%u: reset_id=%u",
+		seq, uid, reset_id);
 }

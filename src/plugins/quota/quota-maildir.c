@@ -33,7 +33,7 @@ struct maildir_quota_root {
 	time_t recalc_last_stamp;
 	off_t last_size;
 
-	unsigned int limits_initialized:1;
+	bool limits_initialized:1;
 };
 
 struct maildir_list_context {
@@ -903,7 +903,7 @@ maildir_quota_update(struct quota_root *_root,
 		   we wanted to do. */
 	} else if (root->fd == -1)
 		(void)maildirsize_recalculate(root);
-	else if (ctx->recalculate) {
+	else if (ctx->recalculate != QUOTA_RECALCULATE_DONT) {
 		i_close_fd(&root->fd);
 		(void)maildirsize_recalculate(root);
 	} else if (maildirsize_update(root, ctx->count_used, ctx->bytes_used) < 0) {

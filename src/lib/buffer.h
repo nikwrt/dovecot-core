@@ -19,11 +19,11 @@ void buffer_create_from_data(buffer_t *buffer, void *data, size_t size);
 void buffer_create_from_const_data(buffer_t *buffer,
 				   const void *data, size_t size);
 #if defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) > 401
-#define buffer_create_from_data(b,d,s) ({					\
-	(void)COMPILE_ERROR_IF_TRUE(__builtin_object_size((d),1) < ((s)?(s):1)); \
+#define buffer_create_from_data(b,d,s) ({				           \
+	(void)COMPILE_ERROR_IF_TRUE(__builtin_object_size((d),1) < ((s)>0?(s):1)); \
 	buffer_create_from_data((b), (d), (s)); })
-#define buffer_create_from_const_data(b,d,s) ({					\
-	(void)COMPILE_ERROR_IF_TRUE(__builtin_object_size((d),1) < ((s)?(s):1)); \
+#define buffer_create_from_const_data(b,d,s) ({				           \
+	(void)COMPILE_ERROR_IF_TRUE(__builtin_object_size((d),1) < ((s)>0?(s):1)); \
 	buffer_create_from_const_data((b), (d), (s)); })
 #endif
 /* Creates a dynamically growing buffer. Whenever write would exceed the
@@ -38,9 +38,6 @@ void *buffer_free_without_data(buffer_t **buf);
 
 /* Returns the pool buffer was created with. */
 pool_t buffer_get_pool(const buffer_t *buf) ATTR_PURE;
-
-/* Reset the buffer. used size and it's contents are zeroed. */
-void buffer_reset(buffer_t *buf);
 
 /* Write data to buffer at specified position. */
 void buffer_write(buffer_t *buf, size_t pos,
@@ -86,7 +83,9 @@ void *buffer_get_modifiable_data(const buffer_t *buf, size_t *used_size_r)
 	ATTR_NULL(2);
 
 /* Set the "used size" of buffer, ie. 0 would set the buffer empty.
-   Must not be used to grow buffer. */
+   Must not be used to grow buffer. The data after the buffer's new size will
+   be effectively lost, because e.g. buffer_get_space_unsafe() will zero out
+   the contents. */
 void buffer_set_used_size(buffer_t *buf, size_t used_size);
 
 /* Returns the current buffer size. */

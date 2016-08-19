@@ -57,12 +57,14 @@ struct dsync_mailbox_exporter {
 	const char *error;
 	enum mail_error mail_error;
 
-	unsigned int body_search_initialized:1;
-	unsigned int auto_export_mails:1;
-	unsigned int mails_have_guids:1;
-	unsigned int minimal_dmail_fill:1;
-	unsigned int return_all_mails:1;
-	unsigned int export_received_timestamps:1;
+	bool body_search_initialized:1;
+	bool auto_export_mails:1;
+	bool mails_have_guids:1;
+	bool minimal_dmail_fill:1;
+	bool return_all_mails:1;
+	bool export_received_timestamps:1;
+	bool export_virtual_sizes:1;
+	bool no_hdr_hashes:1;
 };
 
 static int dsync_mail_error(struct dsync_mailbox_exporter *exporter,
@@ -163,6 +165,10 @@ exporter_get_guids(struct dsync_mailbox_exporter *exporter,
 
 	if (!exporter->mails_have_guids) {
 		/* get header hash also */
+		if (exporter->no_hdr_hashes) {
+			*hdr_hash_r = "";
+			return 1;
+		}
 		if (dsync_mail_get_hdr_hash(mail, exporter->hdr_hash_version, hdr_hash_r) < 0)
 			return dsync_mail_error(exporter, mail, "hdr-stream");
 		return 1;
@@ -279,12 +285,15 @@ search_add_save(struct dsync_mailbox_exporter *exporter, struct mail *mail)
 	const char *guid, *hdr_hash;
 	enum mail_fetch_field wanted_fields = MAIL_FETCH_GUID;
 	time_t received_timestamp = 0;
+	uoff_t virtual_size = (uoff_t)-1;
 	int ret;
 
 	/* update wanted fields in case we didn't already set them for the
 	   search */
 	if (exporter->export_received_timestamps)
 		wanted_fields |= MAIL_FETCH_RECEIVED_DATE;
+	if (exporter->export_virtual_sizes)
+		wanted_fields |= MAIL_FETCH_VIRTUAL_SIZE;
 	mail_add_temp_wanted_fields(mail, wanted_fields,
 				    exporter->wanted_headers);
 
@@ -301,12 +310,18 @@ search_add_save(struct dsync_mailbox_exporter *exporter, struct mail *mail)
 			received_timestamp = 1;
 		}
 	}
+	if (exporter->export_received_timestamps) {
+		if (mail_get_virtual_size(mail, &virtual_size) < 0)
+			return dsync_mail_error(exporter, mail, "virtual-size");
+		i_assert(virtual_size != (uoff_t)-1);
+	}
 
 	change = export_save_change_get(exporter, mail->uid);
 	change->guid = *guid == '\0' ? "" :
 		p_strdup(exporter->pool, guid);
 	change->hdr_hash = p_strdup(exporter->pool, hdr_hash);
 	change->received_timestamp = received_timestamp;
+	change->virtual_size = virtual_size;
 	search_update_flag_changes(exporter, mail, change);
 
 	export_add_mail_instance(exporter, change, mail->seq);
@@ -503,15 +518,19 @@ dsync_mailbox_export_init(struct mailbox *box,
 		(flags & DSYNC_MAILBOX_EXPORTER_FLAG_MINIMAL_DMAIL_FILL) != 0;
 	exporter->export_received_timestamps =
 		(flags & DSYNC_MAILBOX_EXPORTER_FLAG_TIMESTAMPS) != 0;
+	exporter->export_virtual_sizes =
+		(flags & DSYNC_MAILBOX_EXPORTER_FLAG_VSIZES) != 0;
 	exporter->hdr_hash_version =
-		(flags & DSYNC_MAILBOX_EXPORTER_FLAG_HDR_HASH_V2) ? 2 : 1;
+		(flags & DSYNC_MAILBOX_EXPORTER_FLAG_HDR_HASH_V2) != 0 ? 2 : 1;
+	exporter->no_hdr_hashes =
+		(flags & DSYNC_MAILBOX_EXPORTER_FLAG_NO_HDR_HASHES) != 0;
 	p_array_init(&exporter->requested_uids, pool, 16);
 	p_array_init(&exporter->search_uids, pool, 16);
 	hash_table_create(&exporter->export_guids, pool, 0, str_hash, strcmp);
 	p_array_init(&exporter->expunged_seqs, pool, 16);
 	p_array_init(&exporter->expunged_guids, pool, 16);
 
-	if (!exporter->mails_have_guids)
+	if (!exporter->mails_have_guids && !exporter->no_hdr_hashes)
 		exporter->wanted_headers = dsync_mail_get_hash_headers(box);
 
 	/* first scan transaction log and save any expunges and flag changes */
@@ -538,7 +557,7 @@ dsync_mailbox_export_iter_next_nonexistent_attr(struct dsync_mailbox_exporter *e
 			continue;
 
 		/* lookup the value mainly to get its last_change value. */
-		if (mailbox_attribute_get_stream(exporter->trans, attr->type,
+		if (mailbox_attribute_get_stream(exporter->box, attr->type,
 						 attr->key, &value) < 0) {
 			exporter->error = p_strdup_printf(exporter->pool,
 				"Mailbox attribute %s lookup failed: %s", attr->key,
@@ -590,7 +609,7 @@ dsync_mailbox_export_iter_next_attr(struct dsync_mailbox_exporter *exporter)
 		if (attr_change == NULL && !export_all_attrs)
 			continue;
 
-		if (mailbox_attribute_get_stream(exporter->trans,
+		if (mailbox_attribute_get_stream(exporter->box,
 						 exporter->attr_type, key,
 						 &value) < 0) {
 			exporter->error = p_strdup_printf(exporter->pool,

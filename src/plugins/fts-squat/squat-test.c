@@ -56,7 +56,7 @@ int main(int argc ATTR_UNUSED, char *argv[])
 	i_unlink_if_exists(trie_path);
 	i_unlink_if_exists(uidlist_path);
 	trie = squat_trie_init(trie_path, time(NULL),
-			       FILE_LOCK_METHOD_FCNTL, FALSE, 0600, (gid_t)-1);
+			       FILE_LOCK_METHOD_FCNTL, 0, 0600, (gid_t)-1);
 
 	clock_start = clock();
 	gettimeofday(&tv_start, NULL);
@@ -69,7 +69,7 @@ int main(int argc ATTR_UNUSED, char *argv[])
 		return 1;
 
 	valid = buffer_create_dynamic(default_pool, 4096);
-	input = i_stream_create_fd(fd, (size_t)-1, FALSE);
+	input = i_stream_create_fd(fd, (size_t)-1);
 	ret = 0;
 	while (ret == 0 && (line = i_stream_read_next_line(input)) != NULL) {
 		if (last != input->v_offset/(1024*100)) {

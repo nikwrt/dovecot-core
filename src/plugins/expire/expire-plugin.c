@@ -45,8 +45,8 @@ struct expire_mailbox {
 struct expire_transaction_context {
 	union mailbox_transaction_module_context module_ctx;
 
-	unsigned int saves:1;
-	unsigned int first_expunged:1;
+	bool saves:1;
+	bool first_expunged:1;
 };
 
 const char *expire_plugin_version = DOVECOT_ABI_VERSION;
@@ -115,7 +115,7 @@ static int expire_lookup(struct mailbox *box, const char *key,
 	const struct expire_mail_index_header *hdr;
 	const void *data;
 	size_t data_size;
-	const char *value;
+	const char *value, *error;
 	int ret;
 
 	/* default to ioloop_time for newly saved mails. it may not be exactly
@@ -138,10 +138,12 @@ static int expire_lookup(struct mailbox *box, const char *key,
 	}
 
 	ret = dict_lookup(euser->db, pool_datastack_create(),
-			  key, &value);
+			  key, &value, &error);
 	if (ret <= 0) {
-		if (ret < 0)
+		if (ret < 0) {
+			i_error("expire: dict_lookup(%s) failed: %s", key, error);
 			return -1;
+		}
 		first_save_timestamp(box, new_stamp_r);
 		return 0;
 	}
@@ -156,11 +158,12 @@ expire_update(struct mailbox *box, const char *key, time_t timestamp)
 	struct dict_transaction_context *dctx;
 	struct mail_index_transaction *trans;
 	struct expire_mail_index_header hdr;
+	const char *error;
 
 	dctx = dict_transaction_begin(euser->db);
 	dict_set(dctx, key, dec2str(timestamp));
-	if (dict_transaction_commit(&dctx) < 0)
-		i_error("expire: dict commit failed");
+	if (dict_transaction_commit(&dctx, &error) < 0)
+		i_error("expire: dict commit failed: %s", error);
 	else if (euser->expire_cache) {
 		memset(&hdr, 0, sizeof(hdr));
 		hdr.timestamp = timestamp;
@@ -402,23 +405,27 @@ static void expire_mail_namespaces_created(struct mail_namespace *ns)
 	struct mail_user *user = ns->user;
 	struct mail_user_vfuncs *v = user->vlast;
 	struct expire_mail_user *euser;
+	struct dict_settings dict_set;
 	struct dict *db;
 	const char *dict_uri, *error;
 
-	dict_uri = mail_user_plugin_getenv(user, "expire_dict");
-	if (mail_user_plugin_getenv(user, "expire") == NULL) {
+	if (!mail_user_plugin_getenv_bool(user, "expire")) {
 		if (user->mail_debug)
 			i_debug("expire: No expire setting - plugin disabled");
 		return;
 	}
+
+	dict_uri = mail_user_plugin_getenv(user, "expire_dict");
 	if (dict_uri == NULL) {
 		i_error("expire plugin: expire_dict setting missing");
 		return;
 	}
-
 	/* we're using only shared dictionary, the username doesn't matter. */
-	if (dict_init(dict_uri, DICT_DATA_TYPE_UINT32, "",
-		      user->set->base_dir, &db, &error) < 0) {
+	memset(&dict_set, 0, sizeof(dict_set));
+	dict_set.value_type = DICT_DATA_TYPE_UINT32;
+	dict_set.username = "";
+	dict_set.base_dir = user->set->base_dir;
+	if (dict_init(dict_uri, &dict_set, &db, &error) < 0) {
 		i_error("expire plugin: dict_init(%s) failed: %s",
 			dict_uri, error);
 		return;
@@ -431,7 +438,7 @@ static void expire_mail_namespaces_created(struct mail_namespace *ns)
 
 	euser->db = db;
 	euser->set = expire_set_init(expire_get_patterns(user));
-	euser->expire_cache = mail_user_plugin_getenv(user, "expire_cache") != NULL;
+	euser->expire_cache = mail_user_plugin_getenv_bool(user, "expire_cache");
 	MODULE_CONTEXT_SET(user, expire_mail_user_module, euser);
 }
 

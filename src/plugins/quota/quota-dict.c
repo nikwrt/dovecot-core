@@ -79,7 +79,7 @@ static int dict_quota_init(struct quota_root *_root, const char *args,
 
 	if (_root->quota->set->debug) {
 		i_debug("dict quota: user=%s, uri=%s, noenforcing=%d",
-			username, args, _root->no_enforcing);
+			username, args, _root->no_enforcing ? 1 : 0);
 	}
 
 	/* FIXME: we should use 64bit integer as datatype instead but before
@@ -89,7 +89,7 @@ static int dict_quota_init(struct quota_root *_root, const char *args,
 	set.base_dir = _root->quota->user->set->base_dir;
 	if (mail_user_get_home(_root->quota->user, &set.home_dir) <= 0)
 		set.home_dir = NULL;
-	if (dict_init_full(args, &set, &root->dict, &error) < 0) {
+	if (dict_init(args, &set, &root->dict, &error) < 0) {
 		*error_r = t_strdup_printf("dict_init(%s) failed: %s", args, error);
 		return -1;
 	}
@@ -102,8 +102,10 @@ static void dict_quota_deinit(struct quota_root *_root)
 
 	i_assert(root->to_update == NULL);
 
-	if (root->dict != NULL)
+	if (root->dict != NULL) {
+		dict_wait(root->dict);
 		dict_deinit(&root->dict);
+	}
 	i_free(root);
 }
 
@@ -163,14 +165,16 @@ dict_quota_get_resource(struct quota_root *_root,
 		return 0;
 
 	T_BEGIN {
-		const char *value;
+		const char *key, *value, *error;
 
+		key = want_bytes ? DICT_QUOTA_CURRENT_BYTES_PATH :
+			DICT_QUOTA_CURRENT_COUNT_PATH;
 		ret = dict_lookup(root->dict, unsafe_data_stack_pool,
-				  want_bytes ? DICT_QUOTA_CURRENT_BYTES_PATH :
-				  DICT_QUOTA_CURRENT_COUNT_PATH, &value);
-		if (ret < 0)
+				  key, &value, &error);
+		if (ret < 0) {
+			i_error("dict quota: dict_lookup(%s) failed: %s", key, error);
 			*value_r = 0;
-		else {
+		} else {
 			intmax_t tmp;
 
 			/* recalculate quota if it's negative or if it
@@ -196,16 +200,18 @@ static void dict_quota_recalc_timeout(struct dict_quota_root *root)
 	(void)dict_quota_count(root, TRUE, &value);
 }
 
-static void dict_quota_update_callback(int ret, void *context)
+static void dict_quota_update_callback(const struct dict_commit_result *result,
+				       void *context)
 {
 	struct dict_quota_root *root = context;
 
-	if (ret == 0) {
+	if (result->ret == 0) {
 		/* row doesn't exist, need to recalculate it */
 		if (root->to_update == NULL)
 			root->to_update = timeout_add_short(0, dict_quota_recalc_timeout, root);
-	} else if (ret < 0) {
-		i_error("dict quota: Quota update failed, it's now desynced");
+	} else if (result->ret < 0) {
+		i_error("dict quota: Quota update failed: %s "
+			"- Quota is now desynced", result->error);
 	}
 }
 
@@ -217,7 +223,7 @@ dict_quota_update(struct quota_root *_root,
 	struct dict_transaction_context *dt;
 	uint64_t value;
 
-	if (ctx->recalculate) {
+	if (ctx->recalculate != QUOTA_RECALCULATE_DONT) {
 		if (dict_quota_count(root, TRUE, &value) < 0)
 			return -1;
 	} else {
@@ -230,6 +236,7 @@ dict_quota_update(struct quota_root *_root,
 			dict_atomic_inc(dt, DICT_QUOTA_CURRENT_COUNT_PATH,
 					ctx->count_used);
 		}
+		dict_transaction_no_slowness_warning(dt);
 		dict_transaction_commit_async(&dt, dict_quota_update_callback,
 					      root);
 	}
@@ -240,10 +247,10 @@ static void dict_quota_flush(struct quota_root *_root)
 {
 	struct dict_quota_root *root = (struct dict_quota_root *)_root;
 
-	(void)dict_wait(root->dict);
+	dict_wait(root->dict);
 	if (root->to_update != NULL) {
 		dict_quota_recalc_timeout(root);
-		(void)dict_wait(root->dict);
+		dict_wait(root->dict);
 	}
 }
 

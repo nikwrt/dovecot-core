@@ -24,7 +24,7 @@
 struct msg_map_common {
 	/* sha1(header) - set only when needed */
 	unsigned char hdr_sha1[SHA1_RESULTLEN];
-	unsigned int hdr_sha1_set:1;
+	bool hdr_sha1_set:1;
 };
 
 struct pop3_uidl_map {
@@ -53,10 +53,10 @@ struct pop3_migration_mail_storage {
 	const char *pop3_box_vname;
 	ARRAY(struct pop3_uidl_map) pop3_uidl_map;
 
-	unsigned int all_mailboxes:1;
-	unsigned int pop3_all_hdr_sha1_set:1;
-	unsigned int ignore_missing_uidls:1;
-	unsigned int skip_size_check:1;
+	bool all_mailboxes:1;
+	bool pop3_all_hdr_sha1_set:1;
+	bool ignore_missing_uidls:1;
+	bool skip_size_check:1;
 };
 
 struct pop3_migration_mailbox {
@@ -67,10 +67,10 @@ struct pop3_migration_mailbox {
 
 	struct mail_cache_field cache_field;
 
-	unsigned int cache_field_registered:1;
-	unsigned int uidl_synced:1;
-	unsigned int uidl_sync_failed:1;
-	unsigned int uidl_ordered:1;
+	bool cache_field_registered:1;
+	bool uidl_synced:1;
+	bool uidl_sync_failed:1;
+	bool uidl_ordered:1;
 };
 
 /* NOTE: these headers must be sorted */
@@ -153,11 +153,8 @@ pop3_header_filter_callback(struct header_filter_istream *input ATTR_UNUSED,
 		return;
 	if (hdr->eoh) {
 		ctx->have_eoh = TRUE;
-		if (ctx->stop) {
-			/* matched is handled differently for eoh by
-			 istream-header-filter. a design bug I guess.. */
-			*matched = FALSE;
-		}
+		if (ctx->stop)
+			*matched = TRUE;
 	} else {
 		if (strspn(hdr->name, "\r") == hdr->name_len) {
 			/* CR+CR+LF - some servers stop the header processing
@@ -177,7 +174,7 @@ pop3_header_filter_callback(struct header_filter_istream *input ATTR_UNUSED,
 
 int pop3_migration_get_hdr_sha1(uint32_t mail_seq, struct istream *input,
 				uoff_t hdr_size,
-				unsigned char sha1_r[SHA1_RESULTLEN],
+				unsigned char sha1_r[STATIC_ARRAY SHA1_RESULTLEN],
 				bool *have_eoh_r)
 {
 	struct istream *input2;
@@ -197,7 +194,7 @@ int pop3_migration_get_hdr_sha1(uint32_t mail_seq, struct istream *input,
 	i_stream_unref(&input2);
 
 	sha1_init(&sha1_ctx);
-	while (i_stream_read_data(input, &data, &size, 0) > 0) {
+	while (i_stream_read_more(input, &data, &size) > 0) {
 		message_header_hash_more(&hash_method_sha1, &sha1_ctx, 2,
 					 data, size);
 		i_stream_skip(input, size);
@@ -231,7 +228,7 @@ static unsigned int get_cache_idx(struct mail *mail)
 }
 
 static int
-get_hdr_sha1(struct mail *mail, unsigned char sha1_r[SHA1_RESULTLEN])
+get_hdr_sha1(struct mail *mail, unsigned char sha1_r[STATIC_ARRAY SHA1_RESULTLEN])
 {
 	struct istream *input;
 	struct message_size hdr_size;
@@ -276,7 +273,7 @@ get_hdr_sha1(struct mail *mail, unsigned char sha1_r[SHA1_RESULTLEN])
 	   So we'll try to avoid this by falling back to full FETCH BODY[]
 	   (and/or RETR) and we'll parse the header ourself from it. This
 	   should work around any similar bugs in all IMAP/POP3 servers. */
-	if (mail_get_stream(mail, &hdr_size, NULL, &input) < 0) {
+	if (mail_get_stream_because(mail, &hdr_size, NULL, "pop3-migration", &input) < 0) {
 		errstr = mailbox_get_last_error(mail->box, &error);
 		i_error("pop3_migration: Failed to get body for msg %u: %s",
 			mail->seq, errstr);
@@ -290,7 +287,7 @@ get_hdr_sha1(struct mail *mail, unsigned char sha1_r[SHA1_RESULTLEN])
 
 static bool
 get_cached_hdr_sha1(struct mail *mail, buffer_t *cache_buf,
-		    unsigned char sha1_r[SHA1_RESULTLEN])
+		    unsigned char sha1_r[STATIC_ARRAY SHA1_RESULTLEN])
 {
 	struct index_mail *imail = (struct index_mail *)mail;
 
@@ -884,14 +881,14 @@ static void pop3_migration_mail_storage_created(struct mail_storage *storage)
 
 	mstorage->pop3_box_vname = p_strdup(storage->pool, pop3_box_vname);
 	mstorage->all_mailboxes =
-		mail_user_plugin_getenv(storage->user,
-					"pop3_migration_all_mailboxes") != NULL;
+		mail_user_plugin_getenv_bool(storage->user,
+					"pop3_migration_all_mailboxes");
 	mstorage->ignore_missing_uidls =
-		mail_user_plugin_getenv(storage->user,
-			"pop3_migration_ignore_missing_uidls") != NULL;
+		mail_user_plugin_getenv_bool(storage->user,
+			"pop3_migration_ignore_missing_uidls");
 	mstorage->skip_size_check =
-		mail_user_plugin_getenv(storage->user,
-			"pop3_migration_skip_size_check") != NULL;
+		mail_user_plugin_getenv_bool(storage->user,
+			"pop3_migration_skip_size_check");
 
 	MODULE_CONTEXT_SET(storage, pop3_migration_storage_module, mstorage);
 }

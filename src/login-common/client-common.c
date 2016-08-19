@@ -80,10 +80,8 @@ static void client_idle_disconnect_timeout(struct client *client)
 
 static void client_open_streams(struct client *client)
 {
-	client->input =
-		i_stream_create_fd(client->fd, LOGIN_MAX_INBUF_SIZE, FALSE);
-	client->output =
-		o_stream_create_fd(client->fd, LOGIN_MAX_OUTBUF_SIZE, FALSE);
+	client->input = i_stream_create_fd(client->fd, LOGIN_MAX_INBUF_SIZE);
+	client->output = o_stream_create_fd(client->fd, LOGIN_MAX_OUTBUF_SIZE);
 	o_stream_set_no_error_handling(client->output, TRUE);
 
 	if (login_rawlog_dir != NULL) {
@@ -472,11 +470,9 @@ const char *client_get_session_id(struct client *client)
 
 	buffer_append_c(buf, client->remote_port & 0xff);
 	buffer_append_c(buf, (client->remote_port >> 8) & 0xff);
-#ifdef HAVE_IPV6
 	if (IPADDR_IS_V6(&client->ip))
 		buffer_append(buf, &client->ip.u.ip6, sizeof(client->ip.u.ip6));
 	else
-#endif
 		buffer_append(buf, &client->ip.u.ip4, sizeof(client->ip.u.ip4));
 	base64_encode(buf->data, buf->used, base64_buf);
 	client->session_id = p_strdup(client->pool, str_c(base64_buf));
@@ -533,7 +529,7 @@ get_var_expand_table(struct client *client)
 {
 	struct var_expand_table *tab;
 
-	tab = t_malloc(sizeof(login_var_expand_empty_tab));
+	tab = t_malloc_no0(sizeof(login_var_expand_empty_tab));
 	memcpy(tab, login_var_expand_empty_tab,
 	       sizeof(login_var_expand_empty_tab));
 
@@ -643,7 +639,7 @@ client_get_log_str(struct client *client, const char *msg)
 
 	var_expand_table = get_var_expand_table(client);
 
-	tab = t_malloc(sizeof(static_tab));
+	tab = t_malloc_no0(sizeof(static_tab));
 	memcpy(tab, static_tab, sizeof(static_tab));
 
 	str = t_str_new(256);

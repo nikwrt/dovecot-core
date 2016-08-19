@@ -114,7 +114,6 @@ add_binary_part(struct binary_ctx *ctx, const struct message_part *part,
 	message_parse_header_deinit(&parser);
 
 	if (ctx->input->stream_errno != 0) {
-		errno = ctx->input->stream_errno;
 		mail_storage_set_critical(ctx->mail->box->storage,
 			"read(%s) failed: %s", i_stream_get_name(ctx->input),
 			i_stream_get_error(ctx->input));
@@ -320,7 +319,7 @@ blocks_count_lines(struct binary_ctx *ctx, struct istream *full_input)
 	block_idx = 0;
 
 	/* count the number of lines each block contains */
-	while ((ret = i_stream_read_data(full_input, &data, &size, 0)) > 0) {
+	while ((ret = i_stream_read_more(full_input, &data, &size)) > 0) {
 		i_assert(cur_block_offset <= cur_block->input->v_offset);
 		if (cur_block->input->eof) {
 			/* this is the last input for this block. the input
@@ -362,8 +361,8 @@ blocks_count_lines(struct binary_ctx *ctx, struct istream *full_input)
 static int
 index_mail_read_binary_to_cache(struct mail *_mail,
 				const struct message_part *part,
-				bool include_hdr, bool *binary_r,
-				bool *converted_r)
+				bool include_hdr, const char *reason,
+				bool *binary_r, bool *converted_r)
 {
 	struct index_mail *mail = (struct index_mail *)_mail;
 	struct mail_binary_cache *cache = &_mail->box->storage->binary_cache;
@@ -374,7 +373,7 @@ index_mail_read_binary_to_cache(struct mail *_mail,
 	t_array_init(&ctx.blocks, 8);
 
 	mail_storage_free_binary_cache(_mail->box->storage);
-	if (mail_get_stream(_mail, NULL, NULL, &ctx.input) < 0)
+	if (mail_get_stream_because(_mail, NULL, NULL, reason, &ctx.input) < 0)
 		return -1;
 
 	if (add_binary_part(&ctx, part, include_hdr) < 0) {
@@ -491,7 +490,7 @@ index_mail_get_binary_size(struct mail *_mail,
 	if (!get_cached_binary_parts(mail)) {
 		/* not found. parse the whole message */
 		if (index_mail_read_binary_to_cache(_mail, all_parts, TRUE,
-						    &binary, &converted) < 0)
+						    "binary.size", &binary, &converted) < 0)
 			return -1;
 	}
 
@@ -509,7 +508,7 @@ index_mail_get_binary_size(struct mail *_mail,
 		msg_part = msg_part_find(all_parts, bin_part->physical_pos);
 		if (msg_part == NULL) {
 			/* either binary.parts or mime.parts is broken */
-			mail_set_cache_corrupted_reason(_mail, MAIL_FETCH_MESSAGE_PARTS, t_strdup_printf(
+			mail_set_cache_corrupted(_mail, MAIL_FETCH_MESSAGE_PARTS, t_strdup_printf(
 				"BINARY part at offset %"PRIuUOFF_T" not found from MIME parts",
 				bin_part->physical_pos));
 			return -1;
@@ -568,7 +567,7 @@ int index_mail_get_binary_stream(struct mail *_mail,
 		converted = TRUE;
 	} else {
 		if (index_mail_read_binary_to_cache(_mail, part, include_hdr,
-						    &binary, &converted) < 0)
+						    "binary stream", &binary, &converted) < 0)
 			return -1;
 		mail->data.cache_fetch_fields |= MAIL_FETCH_STREAM_BINARY;
 	}

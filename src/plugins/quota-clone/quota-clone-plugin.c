@@ -41,6 +41,7 @@ static void quota_clone_flush(struct mailbox *box)
 	struct quota_root_iter *iter;
 	struct quota_root *root;
 	uint64_t bytes_value, count_value, limit;
+	const char *error;
 
 	/* we'll clone the first quota root */
 	iter = quota_root_iter_init(box);
@@ -70,8 +71,8 @@ static void quota_clone_flush(struct mailbox *box)
 		 t_strdup_printf("%llu", (unsigned long long)bytes_value));
 	dict_set(trans, DICT_QUOTA_CLONE_COUNT_PATH,
 		 t_strdup_printf("%llu", (unsigned long long)count_value));
-	if (dict_transaction_commit(&trans) < 0)
-		i_error("quota_clone_plugin: Failed to commit dict update");
+	if (dict_transaction_commit(&trans, &error) < 0)
+		i_error("quota_clone_plugin: Failed to commit dict update: %s", error);
 	else
 		qbox->quota_changed = FALSE;
 }
@@ -164,7 +165,9 @@ static void quota_clone_mail_user_created(struct mail_user *user)
 
 	uri = mail_user_plugin_getenv(user, "quota_clone_dict");
 	if (uri == NULL || uri[0] == '\0') {
-		i_error("The quota_clone_dict setting is missing from configuration");
+		if (user->mail_debug) {
+			i_debug("The quota_clone_dict setting is missing from configuration");
+		}
 		return;
 	}
 
@@ -172,7 +175,7 @@ static void quota_clone_mail_user_created(struct mail_user *user)
 	dict_set.username = user->username;
 	dict_set.base_dir = user->set->base_dir;
 	(void)mail_user_get_home(user, &dict_set.home_dir);
-	if (dict_init_full(uri, &dict_set, &dict, &error) < 0) {
+	if (dict_init(uri, &dict_set, &dict, &error) < 0) {
 		i_error("quota_clone_dict: Failed to initialize '%s': %s",
 			uri, error);
 		return;

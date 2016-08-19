@@ -15,9 +15,10 @@
 int mbox_move(struct mbox_sync_context *sync_ctx,
 	      uoff_t dest, uoff_t source, uoff_t size)
 {
+	struct mbox_mailbox *mbox = sync_ctx->mbox;
 	struct istream *input;
 	struct ostream *output;
-	off_t ret;
+	int ret;
 
 	i_assert(source > 0 || (dest != 1 && dest != 2));
 	i_assert(size < OFF_T_MAX);
@@ -36,27 +37,34 @@ int mbox_move(struct mbox_sync_context *sync_ctx,
 		return -1;
 	}
 
+	/* we're moving data within a file. it really shouldn't be failing at
+	   this point or we're corrupted. */
 	input = i_stream_create_limit(sync_ctx->file_input, size);
-	ret = o_stream_send_istream(output, input);
-	i_stream_unref(&input);
-
-        if (ret == (off_t)size)
-		ret = 0;
-	else if (ret >= 0) {
+	(void)o_stream_send_istream(output, input);
+	if (input->stream_errno != 0) {
+		mail_storage_set_critical(&mbox->storage->storage,
+			"read() failed with mbox file %s: %s",
+			mailbox_get_path(&mbox->box), i_stream_get_error(input));
+		ret = -1;
+	} else if (output->stream_errno != 0) {
+		mail_storage_set_critical(&mbox->storage->storage,
+			"write() failed with mbox file %s: %s",
+			mailbox_get_path(&mbox->box), o_stream_get_error(output));
+		ret = -1;
+	} else if (input->v_offset != size) {
 		mbox_sync_set_critical(sync_ctx,
 			"mbox_move(%"PRIuUOFF_T", %"PRIuUOFF_T", %"PRIuUOFF_T
 			") moved only %"PRIuUOFF_T" bytes",
-			dest, source, size, (uoff_t)ret);
+			dest, source, size, input->v_offset);
 		ret = -1;
-	} else if (ret < 0) {
-		errno = output->stream_errno;
-		mbox_set_syscall_error(sync_ctx->mbox,
-				       "o_stream_send_istream()");
+	} else {
+		ret = 0;
 	}
+	i_stream_unref(&input);
 
 	mbox_sync_file_updated(sync_ctx, FALSE);
 	o_stream_destroy(&output);
-	return (int)ret;
+	return ret;
 }
 
 static int mbox_fill_space(struct mbox_sync_context *sync_ctx,
@@ -354,7 +362,7 @@ static int mbox_sync_read_next(struct mbox_sync_context *sync_ctx,
 	}
 
 	first_mail_expunge_extra = 1 +
-		sync_ctx->first_mail_crlf_expunged ? 1 : 0;
+		(sync_ctx->first_mail_crlf_expunged ? 1 : 0);
 	if (mails[idx].from_offset +
 	    first_mail_expunge_extra - expunged_space != 0) {
 		sync_ctx->dest_first_mail = mails[idx].from_offset == 0;
@@ -427,7 +435,7 @@ static int mbox_sync_read_and_move(struct mbox_sync_context *sync_ctx,
 				"seq=%u uid=%u uid_broken=%d "
 				"originally needed %"PRIuUOFF_T
 				" bytes, now needs %"PRIuSIZE_T" bytes",
-				seq, mails[idx].uid, mails[idx].uid_broken,
+				seq, mails[idx].uid, mails[idx].uid_broken ? 1 : 0,
 				(uoff_t)-mails[idx].space, need_space);
 			return -1;
 		}

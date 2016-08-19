@@ -46,7 +46,7 @@ int dsync_mail_get_hdr_hash(struct mail *mail, unsigned int version,
 
 	md5_init(&md5_ctx);
 	while (!i_stream_is_eof(input)) {
-		if (i_stream_read_data(input, &data, &size, 0) == -1)
+		if (i_stream_read_more(input, &data, &size) == -1)
 			break;
 		if (size == 0)
 			break;
@@ -160,4 +160,5 @@ void dsync_mail_change_dup(pool_t pool, const struct dsync_mail_change *src,
 	const_string_array_dup(pool, &src->keyword_changes,
 			       &dest_r->keyword_changes);
 	dest_r->received_timestamp = src->received_timestamp;
+	dest_r->virtual_size = src->virtual_size;
 }

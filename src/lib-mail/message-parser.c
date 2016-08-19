@@ -19,7 +19,7 @@ struct message_boundary {
 	const char *boundary;
 	size_t len;
 
-	unsigned int epilogue_found:1;
+	bool epilogue_found:1;
 };
 
 struct message_parser_ctx {
@@ -44,8 +44,10 @@ struct message_parser_ctx {
 	int (*parse_next_block)(struct message_parser_ctx *ctx,
 				struct message_block *block_r);
 
-	unsigned int part_seen_content_type:1;
-	unsigned int eof:1;
+	bool part_seen_content_type:1;
+	bool multipart:1;
+	bool preparsed:1;
+	bool eof:1;
 };
 
 message_part_header_callback_t *null_message_part_header_callback = NULL;
@@ -65,19 +67,23 @@ static struct message_boundary *
 boundary_find(struct message_boundary *boundaries,
 	      const unsigned char *data, size_t len)
 {
+	struct message_boundary *best = NULL;
+
 	/* As MIME spec says: search from latest one to oldest one so that we
 	   don't break if the same boundary is used in nested parts. Also the
 	   full message line doesn't have to match the boundary, only the
-	   beginning. */
+	   beginning. However, if there are multiple prefixes whose beginning
+	   matches, use the longest matching one. */
 	while (boundaries != NULL) {
 		if (boundaries->len <= len &&
-		    memcmp(boundaries->boundary, data, boundaries->len) == 0)
-			return boundaries;
+		    memcmp(boundaries->boundary, data, boundaries->len) == 0 &&
+		    (best == NULL || best->len < boundaries->len))
+			best = boundaries;
 
 		boundaries = boundaries->next;
 	}
 
-	return NULL;
+	return best;
 }
 
 static void parse_body_add_block(struct message_parser_ctx *ctx,
@@ -127,8 +133,8 @@ static int message_parser_read_more(struct message_parser_ctx *ctx,
 	}
 
 	*full_r = FALSE;
-	ret = i_stream_read_data(ctx->input, &block_r->data,
-				 &block_r->size, ctx->want_count);
+	ret = i_stream_read_bytes(ctx->input, &block_r->data,
+				  &block_r->size, ctx->want_count + 1);
 	if (ret <= 0) {
 		switch (ret) {
 		case 0:
@@ -168,6 +174,8 @@ message_part_append(pool_t pool, struct message_part *parent)
 	struct message_part *p, *part, **list;
 
 	i_assert(parent != NULL);
+	i_assert((parent->flags & (MESSAGE_PART_FLAG_MULTIPART |
+				   MESSAGE_PART_FLAG_MESSAGE_RFC822)) != 0);
 
 	part = p_new(pool, struct message_part, 1);
 	part->parent = parent;
@@ -307,6 +315,8 @@ static int parse_part_finish(struct message_parser_ctx *ctx,
 {
 	struct message_part *part;
 	size_t line_size;
+
+	i_assert(ctx->last_boundary == NULL);
 
 	/* get back to parent MIME part, summing the child MIME part sizes
 	   into parent's body sizes */
@@ -504,6 +514,21 @@ static void parse_content_type(struct message_parser_ctx *ctx,
 	}
 }
 
+static bool block_is_at_eoh(const struct message_block *block)
+{
+	if (block->size < 1)
+		return FALSE;
+	if (block->data[0] == '\n')
+		return TRUE;
+	if (block->data[0] == '\r') {
+		if (block->size < 2)
+			return FALSE;
+		if (block->data[1] == '\n')
+			return TRUE;
+	}
+	return FALSE;
+}
+
 #define MUTEX_FLAGS \
 	(MESSAGE_PART_FLAG_MESSAGE_RFC822 | MESSAGE_PART_FLAG_MULTIPART)
 
@@ -519,12 +544,30 @@ static int parse_next_header(struct message_parser_ctx *ctx,
 	if ((ret = message_parser_read_more(ctx, block_r, &full)) == 0)
 		return ret;
 
+	if (ret > 0 && block_is_at_eoh(block_r) &&
+	    ctx->last_boundary != NULL &&
+	    (part->flags & MESSAGE_PART_FLAG_IS_MIME) != 0) {
+		/* we are at the end of headers and we've determined that we're
+		   going to start a multipart. add the boundary already here
+		   at this point so we can reliably determine whether the
+		   "\n--boundary" belongs to us or to a previous boundary.
+		   this is a problem if the boundary prefixes are identical,
+		   because MIME requires only the prefix to match. */
+		parse_next_body_multipart_init(ctx);
+		ctx->multipart = TRUE;
+	}
+
 	/* before parsing the header see if we can find a --boundary from here.
 	   we're guaranteed to be at the beginning of the line here. */
 	if (ret > 0) {
 		ret = ctx->boundaries == NULL ? -1 :
 			boundary_line_find(ctx, block_r->data,
 					   block_r->size, full, &boundary);
+		if (ret > 0 && boundary->part == ctx->part) {
+			/* our own body begins with our own --boundary.
+			   we don't want to handle that yet. */
+			ret = -1;
+		}
 	}
 	if (ret < 0) {
 		/* no boundary */
@@ -581,17 +624,13 @@ static int parse_next_header(struct message_parser_ctx *ctx,
 	}
 
 	/* end of headers */
-	if ((part->flags & MESSAGE_PART_FLAG_MULTIPART) != 0 &&
-	    ctx->last_boundary == NULL) {
-		/* multipart type but no message boundary */
-		part->flags = 0;
-	}
 	if ((part->flags & MESSAGE_PART_FLAG_IS_MIME) == 0) {
 		/* It's not MIME. Reset everything we found from
 		   Content-Type. */
+		i_assert(!ctx->multipart);
 		part->flags = 0;
-		ctx->last_boundary = NULL;
 	}
+	ctx->last_boundary = NULL;
 
 	if (!ctx->part_seen_content_type ||
 	    (part->flags & MESSAGE_PART_FLAG_IS_MIME) == 0) {
@@ -615,10 +654,11 @@ static int parse_next_header(struct message_parser_ctx *ctx,
 	i_assert((part->flags & MUTEX_FLAGS) != MUTEX_FLAGS);
 
 	ctx->last_chr = '\n';
-	if (ctx->last_boundary != NULL) {
-		parse_next_body_multipart_init(ctx);
+	if (ctx->multipart) {
+		i_assert(ctx->last_boundary == NULL);
+		ctx->multipart = FALSE;
 		ctx->parse_next_block = parse_next_body_to_boundary;
-	} else if (part->flags & MESSAGE_PART_FLAG_MESSAGE_RFC822)
+	} else if ((part->flags & MESSAGE_PART_FLAG_MESSAGE_RFC822) != 0)
 		ctx->parse_next_block = parse_next_body_message_rfc822_init;
 	else if (ctx->boundaries != NULL)
 		ctx->parse_next_block = parse_next_body_to_boundary;
@@ -966,14 +1006,22 @@ static int preparsed_parse_next_header(struct message_parser_ctx *ctx,
 static int preparsed_parse_next_header_init(struct message_parser_ctx *ctx,
 					    struct message_block *block_r)
 {
+	struct istream *hdr_input;
+
 	i_assert(ctx->hdr_parser_ctx == NULL);
 
 	i_assert(ctx->part->physical_pos >= ctx->input->v_offset);
 	i_stream_skip(ctx->input, ctx->part->physical_pos -
 		      ctx->input->v_offset);
 
+	/* the header may become truncated by --boundaries. limit the header
+	   stream's size to what it's supposed to be to avoid duplicating (and
+	   keeping in sync!) all the same complicated logic as in
+	   parse_next_header(). */
+	hdr_input = i_stream_create_limit(ctx->input, ctx->part->header_size.physical_size);
 	ctx->hdr_parser_ctx =
-		message_parse_header_init(ctx->input, NULL, ctx->hdr_flags);
+		message_parse_header_init(hdr_input, NULL, ctx->hdr_flags);
+	i_stream_unref(&hdr_input);
 
 	ctx->parse_next_block = preparsed_parse_next_header;
 	return preparsed_parse_next_header(ctx, block_r);
@@ -1022,17 +1070,20 @@ message_parser_init_from_parts(struct message_part *parts,
 	i_assert(parts != NULL);
 
 	ctx = message_parser_init_int(input, hdr_flags, flags);
+	ctx->preparsed = TRUE;
 	ctx->parts = ctx->part = parts;
 	ctx->parse_next_block = preparsed_parse_next_header_init;
 	return ctx;
 }
 
-int message_parser_deinit(struct message_parser_ctx **_ctx,
+void message_parser_deinit(struct message_parser_ctx **_ctx,
 			  struct message_part **parts_r)
 {
 	const char *error;
 
-	return message_parser_deinit_from_parts(_ctx, parts_r, &error);
+	i_assert((**_ctx).preparsed == FALSE);
+	if (message_parser_deinit_from_parts(_ctx, parts_r, &error) < 0)
+		i_panic("message_parser_deinit_from_parts: %s", error);
 }
 
 int message_parser_deinit_from_parts(struct message_parser_ctx **_ctx,

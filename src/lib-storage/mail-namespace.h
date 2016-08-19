@@ -73,8 +73,8 @@ struct mail_namespace {
 	const struct mail_namespace_settings *set, *unexpanded_set;
 	const struct mail_storage_settings *mail_set;
 
-	unsigned int special_use_mailboxes:1;
-	unsigned int destroyed:1;
+	bool special_use_mailboxes:1;
+	bool destroyed:1;
 };
 
 int mail_namespaces_init(struct mail_user *user, const char **error_r);
@@ -142,7 +142,7 @@ mail_namespace_find_subscribable(struct mail_namespace *namespaces,
 struct mail_namespace *
 mail_namespace_find_unsubscribable(struct mail_namespace *namespaces,
 				   const char *mailbox);
-/* Returns the INBOX namespace, or NULL if there is no such  */
+/* Returns the INBOX namespace. It always exists, so NULL is never returned. */
 struct mail_namespace *
 mail_namespace_find_inbox(struct mail_namespace *namespaces);
 /* Find a namespace with given prefix. */

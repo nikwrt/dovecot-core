@@ -70,7 +70,7 @@ static void cmd_fs_get(int argc, char *argv[])
 
 	file = fs_file_init(fs, argv[0], FS_OPEN_MODE_READONLY);
 	input = fs_read_stream(file, IO_BLOCK_SIZE);
-	while ((ret = i_stream_read_data(input, &data, &size, 0)) > 0) {
+	while ((ret = i_stream_read_more(input, &data, &size)) > 0) {
 		doveadm_print_stream(data, size);
 		i_stream_skip(input, size);
 	}
@@ -99,7 +99,6 @@ static void cmd_fs_put(int argc, char *argv[])
 	struct istream *input;
 	struct ostream *output;
 	buffer_t *hash = NULL;
-	off_t ret;
 	int c;
 
 	while ((c = getopt(argc, argv, "h:")) > 0) {
@@ -137,16 +136,7 @@ static void cmd_fs_put(int argc, char *argv[])
 
 	output = fs_write_stream(file);
 	input = i_stream_create_file(src_path, IO_BLOCK_SIZE);
-	if ((ret = o_stream_send_istream(output, input)) < 0) {
-		if (output->stream_errno != 0) {
-			i_error("write(%s) failed: %s", dest_path,
-				o_stream_get_error(output));
-		} else {
-			i_error("read(%s) failed: %s", src_path,
-				i_stream_get_error(input));
-		}
-		doveadm_exit_code = EX_TEMPFAIL;
-	}
+	o_stream_nsend_istream(output, input);
 	i_stream_destroy(&input);
 	if (fs_write_stream_finish(file, &output) < 0) {
 		i_error("fs_write_stream_finish() failed: %s",
@@ -306,11 +296,8 @@ static int doveadm_fs_delete_async_fname(struct fs_delete_ctx *ctx,
 	if ((ret = cmd_fs_delete_ctx_run(ctx)) < 0)
 		return -1;
 	if (fname != NULL) {
-		if (ret > 0 && fs_wait_async(ctx->fs) < 0) {
-			i_error("fs_wait_async() failed: %s", fs_last_error(ctx->fs));
-			doveadm_exit_code = EX_TEMPFAIL;
-			return -1;;
-		}
+		if (ret > 0)
+			fs_wait_async(ctx->fs);
 		return doveadm_fs_delete_async_fname(ctx, fname);
 	}
 	return 0;
@@ -321,11 +308,7 @@ static void doveadm_fs_delete_async_finish(struct fs_delete_ctx *ctx)
 	unsigned int i;
 
 	while (doveadm_exit_code == 0 && cmd_fs_delete_ctx_run(ctx) > 0) {
-		if (fs_wait_async(ctx->fs) < 0) {
-			i_error("fs_wait_async() failed: %s", fs_last_error(ctx->fs));
-			doveadm_exit_code = EX_TEMPFAIL;
-			break;
-		}
+		fs_wait_async(ctx->fs);
 	}
 	for (i = 0; i < ctx->files_count; i++) {
 		if (ctx->files[i] != NULL)
@@ -398,16 +381,12 @@ cmd_fs_delete_dir_recursive(struct fs *fs, unsigned int async_count,
 	doveadm_fs_delete_async_finish(&ctx);
 }
 
-static void
-cmd_fs_delete_recursive(int argc, char *argv[], unsigned int async_count)
+static void cmd_fs_delete_recursive_path(struct fs *fs, const char *path,
+					 unsigned int async_count)
 {
-	struct fs *fs;
 	struct fs_file *file;
-	const char *path;
 	unsigned int path_len;
 
-	fs = cmd_fs_init(&argc, &argv, 1, cmd_fs_delete);
-	path = argv[0];
 	path_len = strlen(path);
 	if (path_len > 0 && path[path_len-1] != '/')
 		path = t_strconcat(path, "/", NULL);
@@ -423,6 +402,17 @@ cmd_fs_delete_recursive(int argc, char *argv[], unsigned int async_count)
 		}
 		fs_file_deinit(&file);
 	}
+}
+
+static void
+cmd_fs_delete_recursive(int argc, char *argv[], unsigned int async_count)
+{
+	struct fs *fs;
+	unsigned int i;
+
+	fs = cmd_fs_init(&argc, &argv, 0, cmd_fs_delete);
+	for (i = 0; argv[i] != NULL; i++)
+		cmd_fs_delete_recursive_path(fs, argv[i], async_count);
 	fs_deinit(&fs);
 }
 

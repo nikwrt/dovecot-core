@@ -164,7 +164,7 @@ body(struct md5_context *ctx, const void *data, size_t size)
 		d += saved_d;
 
 		ptr += 64;
-	} while (size -= 64);
+	} while ((size -= 64) != 0);
 
 	ctx->a = a;
 	ctx->b = b;
@@ -183,6 +183,7 @@ void md5_init(struct md5_context *ctx)
 
 	ctx->lo = 0;
 	ctx->hi = 0;
+	memset(ctx->block, 0, sizeof(ctx->block));
 }
 
 void md5_update(struct md5_context *ctx, const void *data, size_t size)
@@ -198,7 +199,7 @@ void md5_update(struct md5_context *ctx, const void *data, size_t size)
 
 	used = saved_lo & 0x3f;
 
-	if (used) {
+	if (used != 0) {
 		free = 64 - used;
 
 		if (size < free) {
@@ -220,7 +221,7 @@ void md5_update(struct md5_context *ctx, const void *data, size_t size)
 	memcpy(ctx->buffer, data, size);
 }
 
-void md5_final(struct md5_context *ctx, unsigned char result[MD5_RESULTLEN])
+void md5_final(struct md5_context *ctx, unsigned char result[STATIC_ARRAY MD5_RESULTLEN])
 {
 	/* @UNSAFE */
 	unsigned long used, free;
@@ -273,7 +274,7 @@ void md5_final(struct md5_context *ctx, unsigned char result[MD5_RESULTLEN])
 }
 
 void md5_get_digest(const void *data, size_t size,
-		    unsigned char result[MD5_RESULTLEN])
+		    unsigned char result[STATIC_ARRAY MD5_RESULTLEN])
 {
 	struct md5_context ctx;
 

@@ -20,9 +20,9 @@ struct lzma_istream {
 	size_t high_pos;
 	struct stat last_parent_statbuf;
 
-	unsigned int log_errors:1;
-	unsigned int marked:1;
-	unsigned int strm_closed:1;
+	bool log_errors:1;
+	bool marked:1;
+	bool strm_closed:1;
 };
 
 static void i_stream_lzma_close(struct iostream_private *stream,
@@ -43,8 +43,7 @@ static void lzma_read_error(struct lzma_istream *zstream, const char *error)
 	io_stream_set_error(&zstream->istream.iostream,
 			    "lzma.read(%s): %s at %"PRIuUOFF_T,
 			    i_stream_get_name(&zstream->istream.istream), error,
-			    zstream->istream.abs_start_offset +
-			    zstream->istream.istream.v_offset);
+			    i_stream_get_absolute_offset(&zstream->istream.istream));
 	if (zstream->log_errors)
 		i_error("%s", zstream->istream.iostream.error);
 }
@@ -95,8 +94,7 @@ static ssize_t i_stream_lzma_read(struct istream_private *stream)
 			   have a seek mark. */
 			i_stream_compress(stream);
 		}
-		if (stream->max_buffer_size == 0 ||
-		    stream->buffer_size < stream->max_buffer_size)
+		if (stream->buffer_size < i_stream_get_max_buffer_size(&stream->istream))
 			i_stream_grow_buffer(stream, CHUNK_SIZE);
 
 		if (stream->pos == stream->buffer_size) {
@@ -110,7 +108,7 @@ static ssize_t i_stream_lzma_read(struct istream_private *stream)
 		}
 	}
 
-	if (i_stream_read_data(stream->parent, &data, &size, 0) < 0) {
+	if (i_stream_read_more(stream->parent, &data, &size) < 0) {
 		if (stream->parent->stream_errno != 0) {
 			stream->istream.stream_errno =
 				stream->parent->stream_errno;
@@ -154,7 +152,7 @@ static ssize_t i_stream_lzma_read(struct istream_private *stream)
 		return -1;
 	case LZMA_OPTIONS_ERROR:
 		lzma_read_error(zstream, "Unsupported xz options");
-		stream->istream.stream_errno = EINVAL;
+		stream->istream.stream_errno = EIO;
 		return -1;
 	case LZMA_MEM_ERROR:
 		i_fatal_status(FATAL_OUTOFMEM, "lzma.read(%s): Out of memory",
@@ -169,7 +167,7 @@ static ssize_t i_stream_lzma_read(struct istream_private *stream)
 	default:
 		lzma_read_error(zstream, t_strdup_printf(
 			"lzma_code() failed with %d", ret));
-		stream->istream.stream_errno = EINVAL;
+		stream->istream.stream_errno = EIO;
 		return -1;
 	}
 	if (out_size == 0) {

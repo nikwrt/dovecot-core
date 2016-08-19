@@ -73,7 +73,7 @@ fs_dict_init(struct fs *_fs, const char *args, const struct fs_settings *set)
 	dict_set.username = set->username;
 	dict_set.base_dir = set->base_dir;
 
-	if (dict_init_full(p, &dict_set, &fs->dict, &error) < 0) {
+	if (dict_init(p, &dict_set, &fs->dict, &error) < 0) {
 		fs_set_error(_fs, "dict_init(%s) failed: %s", args, error);
 		return -1;
 	}
@@ -141,21 +141,22 @@ static bool fs_dict_prefetch(struct fs_file *_file ATTR_UNUSED,
 static int fs_dict_lookup(struct dict_fs_file *file)
 {
 	struct dict_fs *fs = (struct dict_fs *)file->file.fs;
+	const char *error;
 	int ret;
 
 	if (file->value != NULL)
 		return 0;
 
-	ret = dict_lookup(fs->dict, file->pool, file->key, &file->value);
+	ret = dict_lookup(fs->dict, file->pool, file->key, &file->value, &error);
 	if (ret > 0)
 		return 0;
 	else if (ret < 0) {
 		errno = EIO;
-		fs_set_error(&fs->fs, "Dict lookup failed");
+		fs_set_error(&fs->fs, "dict_lookup(%s) failed: %s", file->key, error);
 		return -1;
 	} else {
 		errno = ENOENT;
-		fs_set_error(&fs->fs, "Dict key doesn't exist");
+		fs_set_error(&fs->fs, "Dict key %s doesn't exist", file->key);
 		return -1;
 	}
 }
@@ -190,6 +191,7 @@ static int fs_dict_write_stream_finish(struct fs_file *_file, bool success)
 	struct dict_fs_file *file = (struct dict_fs_file *)_file;
 	struct dict_fs *fs = (struct dict_fs *)_file->fs;
 	struct dict_transaction_context *trans;
+	const char *error;
 
 	o_stream_destroy(&_file->output);
 	if (!success)
@@ -216,9 +218,9 @@ static int fs_dict_write_stream_finish(struct fs_file *_file, bool success)
 		dict_set(trans, file->key, str_c(base64));
 	}
 	}
-	if (dict_transaction_commit(&trans) < 0) {
+	if (dict_transaction_commit(&trans, &error) < 0) {
 		errno = EIO;
-		fs_set_error(_file->fs, "Dict transaction commit failed");
+		fs_set_error(_file->fs, "Dict transaction commit failed: %s", error);
 		return -1;
 	}
 	return 1;
@@ -241,12 +243,13 @@ static int fs_dict_delete(struct fs_file *_file)
 	struct dict_fs_file *file = (struct dict_fs_file *)_file;
 	struct dict_fs *fs = (struct dict_fs *)_file->fs;
 	struct dict_transaction_context *trans;
+	const char *error;
 
 	trans = dict_transaction_begin(fs->dict);
 	dict_unset(trans, file->key);
-	if (dict_transaction_commit(&trans) < 0) {
+	if (dict_transaction_commit(&trans, &error) < 0) {
 		errno = EIO;
-		fs_set_error(_file->fs, "Dict transaction commit failed");
+		fs_set_error(_file->fs, "Dict transaction commit failed: %s", error);
 		return -1;
 	}
 	return 0;
@@ -281,11 +284,12 @@ static const char *fs_dict_iter_next(struct fs_iter *_iter)
 static int fs_dict_iter_deinit(struct fs_iter *_iter)
 {
 	struct dict_fs_iter *iter = (struct dict_fs_iter *)_iter;
+	const char *error;
 	int ret;
 
-	ret = dict_iterate_deinit(&iter->dict_iter);
+	ret = dict_iterate_deinit(&iter->dict_iter, &error);
 	if (ret < 0)
-		fs_set_error(_iter->fs, "Dict iteration failed");
+		fs_set_error(_iter->fs, "Dict iteration failed: %s", error);
 	i_free(iter);
 	return ret;
 }
@@ -318,6 +322,8 @@ const struct fs fs_class_dict = {
 		fs_dict_delete,
 		fs_dict_iter_init,
 		fs_dict_iter_next,
-		fs_dict_iter_deinit
+		fs_dict_iter_deinit,
+		NULL,
+		NULL
 	}
 };

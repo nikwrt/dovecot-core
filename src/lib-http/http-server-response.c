@@ -142,8 +142,8 @@ void http_server_response_set_payload(struct http_server_response *resp,
 	resp->payload_input = input;
 	if ((ret = i_stream_get_size(input, TRUE, &resp->payload_size)) <= 0) {
 		if (ret < 0) {
-			i_error("i_stream_get_size(%s) failed: %m",
-				i_stream_get_name(input));
+			i_error("i_stream_get_size(%s) failed: %s",
+				i_stream_get_name(input), i_stream_get_error(input));
 		}
 		resp->payload_size = 0;
 		resp->payload_chunked = TRUE;
@@ -481,7 +481,8 @@ int http_server_response_send_more(struct http_server_response *resp,
 {
 	struct http_server_connection *conn = resp->request->conn;
 	struct ostream *output = resp->payload_output;
-	off_t ret;
+	enum ostream_send_istream_result res;
+	int ret = 0;
 
 	*error_r = NULL;
 
@@ -494,50 +495,57 @@ int http_server_response_send_more(struct http_server_response *resp,
 
 	/* chunked ostream needs to write to the parent stream's buffer */
 	o_stream_set_max_buffer_size(output, IO_BLOCK_SIZE);
-	ret = o_stream_send_istream(output, resp->payload_input);
+	res = o_stream_send_istream(output, resp->payload_input);
 	o_stream_set_max_buffer_size(output, (size_t)-1);
 
-	if (resp->payload_input->stream_errno != 0) {
-		/* we're in the middle of sending a response, so the connection
-		   will also have to be aborted */
-		errno = resp->payload_input->stream_errno;
-		*error_r = t_strdup_printf("read(%s) failed: %m",
-					   i_stream_get_name(resp->payload_input));
-		ret = -1;
-	} else if (output->stream_errno != 0) {
-		/* failed to send response */
-		errno = output->stream_errno;
-		if (errno != EPIPE && errno != ECONNRESET) {
-			*error_r = t_strdup_printf("write(%s) failed: %m",
-					   o_stream_get_name(output));
-		}
-		ret = -1;
-	} else {
-		i_assert(ret >= 0);
-	}
-
-	if (ret < 0 || i_stream_is_eof(resp->payload_input)) {
+	switch (res) {
+	case OSTREAM_SEND_ISTREAM_RESULT_FINISHED:
 		/* finished sending */
-		if (ret >= 0 && !resp->payload_chunked &&
-			resp->payload_input->v_offset - resp->payload_offset !=
+		if (!resp->payload_chunked &&
+		    resp->payload_input->v_offset - resp->payload_offset !=
 				resp->payload_size) {
 			*error_r = t_strdup_printf(
 				"Input stream %s size changed unexpectedly",
 				i_stream_get_name(resp->payload_input));
 			ret = -1;
+		} else {
+			ret = 1;
 		}
-		/* finished sending payload */
-		http_server_response_finish_payload_out(resp);
-	} else if (i_stream_get_data_size(resp->payload_input) > 0) {
-		/* output is blocking */
-		conn->output_locked = TRUE;
-		o_stream_set_flush_pending(output, TRUE);
-		//http_server_response_debug(resp, "Partially sent payload");
-	} else {
+		break;
+	case OSTREAM_SEND_ISTREAM_RESULT_WAIT_INPUT:
 		/* input is blocking */
 		conn->output_locked = TRUE;	
 		conn->io_resp_payload = io_add_istream(resp->payload_input,
 			http_server_response_payload_input, resp);
+		break;
+	case OSTREAM_SEND_ISTREAM_RESULT_WAIT_OUTPUT:
+		/* output is blocking */
+		conn->output_locked = TRUE;
+		o_stream_set_flush_pending(output, TRUE);
+		//http_server_response_debug(resp, "Partially sent payload");
+		break;
+	case OSTREAM_SEND_ISTREAM_RESULT_ERROR_INPUT:
+		/* we're in the middle of sending a response, so the connection
+		   will also have to be aborted */
+		*error_r = t_strdup_printf("read(%s) failed: %s",
+			i_stream_get_name(resp->payload_input),
+			i_stream_get_error(resp->payload_input));
+		ret = -1;
+		break;
+	case OSTREAM_SEND_ISTREAM_RESULT_ERROR_OUTPUT:
+		/* failed to send response */
+		if (output->stream_errno != EPIPE &&
+		    output->stream_errno != ECONNRESET) {
+			*error_r = t_strdup_printf("write(%s) failed: %s",
+				o_stream_get_name(output), o_stream_get_error(output));
+		}
+		ret = -1;
+		break;
+	}
+
+	if (ret != 0) {
+		/* finished sending payload (or error) */
+		http_server_response_finish_payload_out(resp);
 	}
 	return ret < 0 ? -1 : 0;
 }
@@ -646,9 +654,10 @@ static int http_server_response_send_real(struct http_server_response *resp,
 	o_stream_ref(output);
 	o_stream_cork(output);
 	if (o_stream_sendv(output, iov, N_ELEMENTS(iov)) < 0) {
-		if (errno != EPIPE && errno != ECONNRESET) {
-			*error_r = t_strdup_printf("write(%s) failed: %m",
-					   o_stream_get_name(output));
+		if (output->stream_errno != EPIPE &&
+		    output->stream_errno != ECONNRESET) {
+			*error_r = t_strdup_printf("write(%s) failed: %s",
+				o_stream_get_name(output), o_stream_get_error(output));
 		}
 		ret = -1;
 	}

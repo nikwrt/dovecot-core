@@ -7,6 +7,7 @@
 #include "str.h"
 #include "hex-binary.h"
 #include "index-mail.h"
+#include "index-storage.h"
 #include "dbox-attachment.h"
 #include "dbox-file.h"
 #include "dbox-save.h"
@@ -56,8 +57,9 @@ void dbox_save_begin(struct dbox_save_context *ctx, struct istream *input)
 	o_stream_cork(ctx->dbox_output);
 	if (o_stream_send(ctx->dbox_output, &dbox_msg_hdr,
 			  sizeof(dbox_msg_hdr)) < 0) {
-		mail_storage_set_critical(_storage, "write(%s) failed: %m",
-					  o_stream_get_name(ctx->dbox_output));
+		mail_storage_set_critical(_storage, "write(%s) failed: %s",
+					  o_stream_get_name(ctx->dbox_output),
+					  o_stream_get_error(ctx->dbox_output));
 		ctx->failed = TRUE;
 	}
 	_ctx->data.output = ctx->dbox_output;
@@ -70,7 +72,6 @@ void dbox_save_begin(struct dbox_save_context *ctx, struct istream *input)
 int dbox_save_continue(struct mail_save_context *_ctx)
 {
 	struct dbox_save_context *ctx = (struct dbox_save_context *)_ctx;
-	struct mail_storage *storage = _ctx->transaction->box->storage;
 
 	if (ctx->failed)
 		return -1;
@@ -78,22 +79,11 @@ int dbox_save_continue(struct mail_save_context *_ctx)
 	if (_ctx->data.attach != NULL)
 		return index_attachment_save_continue(_ctx);
 
-	do {
-		if (o_stream_send_istream(_ctx->data.output, ctx->input) < 0) {
-			if (!mail_storage_set_error_from_errno(storage)) {
-				mail_storage_set_critical(storage,
-					"write(%s) failed: %m",
-					o_stream_get_name(_ctx->data.output));
-			}
-			ctx->failed = TRUE;
-			return -1;
-		}
-		index_mail_cache_parse_continue(_ctx->dest_mail);
-
-		/* both tee input readers may consume data from our primary
-		   input stream. we'll have to make sure we don't return with
-		   one of the streams still having data in them. */
-	} while (i_stream_read(ctx->input) > 0);
+	if (index_storage_save_continue(_ctx, ctx->input,
+					_ctx->dest_mail) < 0) {
+		ctx->failed = TRUE;
+		return -1;
+	}
 	return 0;
 }
 
@@ -110,8 +100,9 @@ void dbox_save_end(struct dbox_save_context *ctx)
 	}
 	if (o_stream_nfinish(mdata->output) < 0) {
 		mail_storage_set_critical(ctx->ctx.transaction->box->storage,
-					  "write(%s) failed: %m",
-					  o_stream_get_name(mdata->output));
+					  "write(%s) failed: %s",
+					  o_stream_get_name(mdata->output),
+					  o_stream_get_error(mdata->output));
 		ctx->failed = TRUE;
 	}
 	if (mdata->output != dbox_output) {
@@ -166,11 +157,15 @@ void dbox_save_write_metadata(struct mail_save_context *_ctx,
 		str_printfa(str, "%c%s\n", DBOX_METADATA_POP3_UIDL,
 			    mdata->pop3_uidl);
 		ctx->have_pop3_uidls = TRUE;
+		ctx->highest_pop3_uidl_seq =
+			I_MAX(ctx->highest_pop3_uidl_seq, ctx->seq);
 	}
 	if (mdata->pop3_order != 0) {
 		str_printfa(str, "%c%u\n", DBOX_METADATA_POP3_ORDER,
 			    mdata->pop3_order);
 		ctx->have_pop3_orders = TRUE;
+		ctx->highest_pop3_uidl_seq =
+			I_MAX(ctx->highest_pop3_uidl_seq, ctx->seq);
 	}
 
 	guid = mdata->guid;

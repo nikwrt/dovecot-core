@@ -444,18 +444,18 @@ int auth_server_connection_connect(struct auth_server_connection *conn)
 	}
 	conn->fd = fd;
 	conn->io = io_add(fd, IO_READ, auth_server_connection_input, conn);
-	conn->input = i_stream_create_fd(fd, AUTH_SERVER_CONN_MAX_LINE_LENGTH,
-					 FALSE);
-	conn->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	conn->input = i_stream_create_fd(fd, AUTH_SERVER_CONN_MAX_LINE_LENGTH);
+	conn->output = o_stream_create_fd(fd, (size_t)-1);
 
 	handshake = t_strdup_printf("VERSION\t%u\t%u\nCPID\t%u\n",
 				    AUTH_CLIENT_PROTOCOL_MAJOR_VERSION,
                                     AUTH_CLIENT_PROTOCOL_MINOR_VERSION,
 				    conn->client->client_pid);
 	if (o_stream_send_str(conn->output, handshake) < 0) {
-		i_warning("Error sending handshake to auth server: %m");
+		i_warning("Error sending handshake to auth server: %s",
+			  o_stream_get_error(conn->output));
 		auth_server_connection_disconnect(conn,
-			strerror(conn->output->last_failed_errno));
+			o_stream_get_error(conn->output));
 		return -1;
 	}
 

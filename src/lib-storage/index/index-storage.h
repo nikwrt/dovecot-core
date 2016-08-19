@@ -4,7 +4,6 @@
 #include "file-dotlock.h"
 #include "mail-storage-private.h"
 #include "mail-index-private.h"
-#include "mailbox-recent-flags.h" /* FIXME: remove in v2.3 */
 #include "mailbox-watch.h"
 
 #define MAILBOX_FULL_SYNC_INTERVAL 5
@@ -16,6 +15,16 @@ enum mailbox_lock_notify_type {
 	MAILBOX_LOCK_NOTIFY_MAILBOX_ABORT,
 	/* Mailbox lock looks stale, will override in secs_left */
 	MAILBOX_LOCK_NOTIFY_MAILBOX_OVERRIDE
+};
+
+enum index_storage_list_change {
+	INDEX_STORAGE_LIST_CHANGE_ERROR = -1,
+	INDEX_STORAGE_LIST_CHANGE_NONE = 0,
+	INDEX_STORAGE_LIST_CHANGE_INMEMORY,
+	INDEX_STORAGE_LIST_CHANGE_NORECORD,
+	INDEX_STORAGE_LIST_CHANGE_NOT_IN_FS,
+	INDEX_STORAGE_LIST_CHANGE_SIZE_CHANGED,
+	INDEX_STORAGE_LIST_CHANGE_MTIME_CHANGED
 };
 
 struct index_mailbox_context {
@@ -74,12 +83,6 @@ int index_storage_mailbox_rename(struct mailbox *src, struct mailbox *dest);
 bool index_storage_is_readonly(struct mailbox *box);
 bool index_storage_is_inconsistent(struct mailbox *box);
 
-/* FIXME: for backwards compatibility - remove in v2.3 */
-#define index_mailbox_set_recent_seq(box, view, seq1, seq2) \
-	mailbox_recent_flags_set_seqs(box, view, seq1, seq2)
-#define index_mailbox_check_add(box, path) mailbox_watch_add(box, path)
-#define index_mailbox_check_remove_all(box) mailbox_watch_remove_all(box)
-
 enum mail_index_sync_flags index_storage_get_sync_flags(struct mailbox *box);
 bool index_mailbox_want_full_sync(struct mailbox *box,
 				  enum mailbox_sync_flags flags);
@@ -110,10 +113,12 @@ int index_mailbox_get_physical_size(struct mailbox *box,
 
 int index_storage_attribute_set(struct mailbox_transaction_context *t,
 				enum mail_attribute_type type, const char *key,
-				const struct mail_attribute_value *value);
-int index_storage_attribute_get(struct mailbox_transaction_context *t,
+				const struct mail_attribute_value *value,
+				bool internal_attribute);
+int index_storage_attribute_get(struct mailbox *box,
 				enum mail_attribute_type type, const char *key,
-				struct mail_attribute_value *value_r);
+				struct mail_attribute_value *value_r,
+				bool internal_attribute);
 struct mailbox_attribute_iter *
 index_storage_attribute_iter_init(struct mailbox *box,
 				  enum mail_attribute_type type,
@@ -154,7 +159,11 @@ bool index_keyword_array_cmp(const ARRAY_TYPE(keyword_indexes) *k1,
 
 int index_storage_list_index_has_changed(struct mailbox *box,
 					 struct mail_index_view *list_view,
-					 uint32_t seq);
+					 uint32_t seq, bool quick);
+enum index_storage_list_change
+index_storage_list_index_has_changed_full(struct mailbox *box,
+					  struct mail_index_view *list_view,
+					  uint32_t seq);
 void index_storage_list_index_update_sync(struct mailbox *box,
 					  struct mail_index_transaction *trans,
 					  uint32_t seq);
@@ -165,5 +174,9 @@ int index_storage_expunged_sync_begin(struct mailbox *box,
 				      struct mail_index_transaction **trans_r,
 				      enum mail_index_sync_flags flags);
 void index_storage_expunging_deinit(struct mailbox *box);
+
+int index_storage_save_continue(struct mail_save_context *ctx,
+				struct istream *input,
+				struct mail *cache_dest_mail);
 
 #endif

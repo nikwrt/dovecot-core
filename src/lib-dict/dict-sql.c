@@ -30,7 +30,7 @@ struct sql_dict {
 	const char *username;
 	const struct dict_sql_settings *set;
 
-	unsigned int has_on_duplicate_key:1;
+	bool has_on_duplicate_key:1;
 };
 
 struct sql_dict_iterate_context {
@@ -46,7 +46,7 @@ struct sql_dict_iterate_context {
 	unsigned int key_prefix_len, pattern_prefix_len, next_map_idx;
 	unsigned int path_idx, sql_fields_start_idx;
 	bool synchronous_result;
-	bool failed;
+	const char *error;
 };
 
 struct sql_dict_inc_row {
@@ -68,7 +68,7 @@ struct sql_dict_transaction_context {
 	dict_transaction_commit_callback_t *async_callback;
 	void *async_context;
 
-	unsigned int failed:1;
+	char *error;
 };
 
 static struct sql_db_cache *dict_sql_db_cache;
@@ -88,7 +88,7 @@ sql_dict_init(struct dict *driver, const char *uri,
 	dict->pool = pool;
 	dict->dict = *driver;
 	dict->username = p_strdup(pool, set->username);
-	dict->set = dict_sql_settings_read(pool, uri, error_r);
+	dict->set = dict_sql_settings_read(uri, error_r);
 	if (dict->set == NULL) {
 		pool_unref(&pool);
 		return -1;
@@ -111,10 +111,9 @@ static void sql_dict_deinit(struct dict *_dict)
 	pool_unref(&dict->pool);
 }
 
-static int sql_dict_wait(struct dict *dict ATTR_UNUSED)
+static void sql_dict_wait(struct dict *dict ATTR_UNUSED)
 {
 	/* FIXME: lib-sql doesn't support this yet */
-	return 0;
 }
 
 static bool
@@ -214,6 +213,7 @@ sql_dict_find_map(struct sql_dict *dict, const char *path,
 
 static int
 sql_dict_value_escape(string_t *str, struct sql_dict *dict,
+		      const struct dict_sql_map *map,
 		      enum dict_sql_type value_type, const char *field_name,
 		      const char *value, const char *value_suffix,
 		      const char **error_r)
@@ -229,8 +229,8 @@ sql_dict_value_escape(string_t *str, struct sql_dict *dict,
 	case DICT_SQL_TYPE_UINT:
 		if (value_suffix[0] != '\0' || str_to_uint(value, &num) < 0) {
 			*error_r = t_strdup_printf(
-				"field %s value isn't unsigned integer: %s%s",
-				field_name, value, value_suffix);
+				"%s field's value isn't unsigned integer: %s%s (in pattern: %s)",
+				field_name, value, value_suffix, map->pattern);
 			return -1;
 		}
 		str_printfa(str, "%u", num);
@@ -243,8 +243,8 @@ sql_dict_value_escape(string_t *str, struct sql_dict *dict,
 	if (hex_to_binary(value, buf) < 0) {
 		/* we shouldn't get untrusted input here. it's also a bit
 		   annoying to handle this error. */
-		*error_r = t_strdup_printf("field %s value isn't hexblob: %s",
-					   field_name, value);
+		*error_r = t_strdup_printf("%s field's value isn't hexblob: %s (in pattern: %s)",
+					   field_name, value, map->pattern);
 		return -1;
 	}
 	str_append(buf, value_suffix);
@@ -254,11 +254,12 @@ sql_dict_value_escape(string_t *str, struct sql_dict *dict,
 
 static int
 sql_dict_field_escape_value(string_t *str, struct sql_dict *dict,
+			    const struct dict_sql_map *map,
 			    const struct dict_sql_field *field,
 			    const char *value, const char *value_suffix,
 			    const char **error_r)
 {
-	return sql_dict_value_escape(str, dict, field->value_type,
+	return sql_dict_value_escape(str, dict, map, field->value_type,
 				     field->name, value, value_suffix, error_r);
 }
 
@@ -290,7 +291,7 @@ sql_dict_where_build(struct sql_dict *dict, const struct dict_sql_map *map,
 		if (i > 0)
 			str_append(query, " AND");
 		str_printfa(query, " %s = ", sql_fields[i].name);
-		if (sql_dict_field_escape_value(query, dict, &sql_fields[i],
+		if (sql_dict_field_escape_value(query, dict, map, &sql_fields[i],
 						values[i], "", error_r) < 0)
 			return -1;
 	}
@@ -302,11 +303,11 @@ sql_dict_where_build(struct sql_dict *dict, const struct dict_sql_map *map,
 			str_append(query, " AND");
 		if (i < count2) {
 			str_printfa(query, " %s LIKE ", sql_fields[i].name);
-			if (sql_dict_field_escape_value(query, dict, &sql_fields[i],
+			if (sql_dict_field_escape_value(query, dict, map, &sql_fields[i],
 							values[i], "/%", error_r) < 0)
 				return -1;
 			str_printfa(query, " AND %s NOT LIKE ", sql_fields[i].name);
-			if (sql_dict_field_escape_value(query, dict, &sql_fields[i],
+			if (sql_dict_field_escape_value(query, dict, map, &sql_fields[i],
 							values[i], "/%/%", error_r) < 0)
 				return -1;
 		} else {
@@ -321,7 +322,7 @@ sql_dict_where_build(struct sql_dict *dict, const struct dict_sql_map *map,
 				str_append(query, " AND");
 			str_printfa(query, " %s LIKE ",
 				    sql_fields[i].name);
-			if (sql_dict_field_escape_value(query, dict, &sql_fields[i],
+			if (sql_dict_field_escape_value(query, dict, map, &sql_fields[i],
 							values[i], "/%", error_r) < 0)
 				return -1;
 		}
@@ -418,38 +419,26 @@ sql_dict_result_unescape_field(const struct dict_sql_map *map, pool_t pool,
 					result, result_idx);
 }
 
-static int sql_dict_lookup(struct dict *_dict, pool_t pool,
-			   const char *key, const char **value_r)
+static int sql_dict_lookup(struct dict *_dict, pool_t pool, const char *key,
+			   const char **value_r, const char **error_r)
 {
 	struct sql_dict *dict = (struct sql_dict *)_dict;
 	const struct dict_sql_map *map;
 	struct sql_result *result = NULL;
+	string_t *query = t_str_new(256);
 	int ret;
 
-	T_BEGIN {
-		string_t *query = t_str_new(256);
-		const char *error;
+	*value_r = NULL;
 
-		ret = sql_lookup_get_query(dict, key, query, &map, &error);
-		if (ret < 0)
-			i_error("%s", error);
-		else
-			result = sql_query_s(dict->db, str_c(query));
-	} T_END;
-
-	if (ret < 0) {
-		*value_r = NULL;
+	if (sql_lookup_get_query(dict, key, query, &map, error_r) < 0)
 		return -1;
-	}
 
+	result = sql_query_s(dict->db, str_c(query));
 	ret = sql_result_next_row(result);
-	if (ret <= 0) {
-		if (ret < 0) {
-			i_error("dict sql lookup failed: %s",
-				sql_result_get_error(result));
-		}
-		*value_r = NULL;
-	} else {
+	if (ret < 0) {
+		*error_r = t_strdup_printf("dict sql lookup failed: %s",
+					   sql_result_get_error(result));
+	} else if (ret > 0) {
 		*value_r = sql_dict_result_unescape_value(map, pool, result);
 	}
 
@@ -476,6 +465,12 @@ sql_dict_lookup_async_callback(struct sql_result *sql_result,
 	else if (result.ret > 0) {
 		result.value = sql_dict_result_unescape_value(ctx->map,
 			pool_datastack_create(), sql_result);
+		if (result.value == NULL) {
+			/* NULL value returned. we'll treat this as
+			   "not found", which is probably what is usually
+			   wanted. */
+			result.ret = 0;
+		}
 	}
 	ctx->callback(&result, ctx->context);
 
@@ -489,27 +484,24 @@ sql_dict_lookup_async(struct dict *_dict, const char *key,
 	struct sql_dict *dict = (struct sql_dict *)_dict;
 	const struct dict_sql_map *map;
 	struct sql_dict_lookup_context *ctx;
+	string_t *query = t_str_new(256);
+	const char *error;
 
-	T_BEGIN {
-		string_t *query = t_str_new(256);
-		const char *error;
+	if (sql_lookup_get_query(dict, key, query, &map, &error) < 0) {
+		struct dict_lookup_result result;
 
-		if (sql_lookup_get_query(dict, key, query, &map, &error) < 0) {
-			struct dict_lookup_result result;
-
-			memset(&result, 0, sizeof(result));
-			result.ret = -1;
-			result.error = error;
-			callback(&result, context);
-		} else {
-			ctx = i_new(struct sql_dict_lookup_context, 1);
-			ctx->callback = callback;
-			ctx->context = context;
-			ctx->map = map;
-			sql_query(dict->db, str_c(query),
-				  sql_dict_lookup_async_callback, ctx);
-		}
-	} T_END;
+		memset(&result, 0, sizeof(result));
+		result.ret = -1;
+		result.error = error;
+		callback(&result, context);
+	} else {
+		ctx = i_new(struct sql_dict_lookup_context, 1);
+		ctx->callback = callback;
+		ctx->context = context;
+		ctx->map = map;
+		sql_query(dict->db, str_c(query),
+			  sql_dict_lookup_async_callback, ctx);
+	}
 }
 
 static const struct dict_sql_map *
@@ -625,26 +617,23 @@ static int sql_dict_iterate_next_query(struct sql_dict_iterate_context *ctx,
 				       const char **error_r)
 {
 	struct sql_dict *dict = (struct sql_dict *)ctx->ctx.dict;
+	string_t *query = t_str_new(256);
 	char *error = NULL;
 	int ret;
 
-	T_BEGIN {
-		string_t *query = t_str_new(256);
-
-		ret = sql_dict_iterate_build_next_query(ctx, query, error_r);
-		if (ret <= 0) {
-			/* failed */
-			error = i_strdup(*error_r);
-		} else if ((ctx->flags & DICT_ITERATE_FLAG_ASYNC) == 0) {
-			ctx->result = sql_query_s(dict->db, str_c(query));
-		} else {
-			i_assert(ctx->result == NULL);
-			ctx->synchronous_result = TRUE;
-			sql_query(dict->db, str_c(query),
-				  sql_dict_iterate_callback, ctx);
-			ctx->synchronous_result = FALSE;
-		}
-	} T_END;
+	ret = sql_dict_iterate_build_next_query(ctx, query, error_r);
+	if (ret <= 0) {
+		/* failed */
+		error = i_strdup(*error_r);
+	} else if ((ctx->flags & DICT_ITERATE_FLAG_ASYNC) == 0) {
+		ctx->result = sql_query_s(dict->db, str_c(query));
+	} else {
+		i_assert(ctx->result == NULL);
+		ctx->synchronous_result = TRUE;
+		sql_query(dict->db, str_c(query),
+			  sql_dict_iterate_callback, ctx);
+		ctx->synchronous_result = FALSE;
+	}
 	*error_r = t_strdup(error);
 	i_free(error);
 	return ret;
@@ -672,10 +661,9 @@ sql_dict_iterate_init(struct dict *_dict, const char *const *paths,
 
 	ctx->key = str_new(pool, 256);
 	if (sql_dict_iterate_next_query(ctx, &error) <= 0) {
-		i_error("sql dict iterate failed for %s: %s",
-			paths[0], error);
+		ctx->error = p_strdup_printf(pool,
+			"sql dict iterate failed for %s: %s", paths[0], error);
 		ctx->result = NULL;
-		ctx->failed = TRUE;
 		return &ctx->ctx;
 	}
 	return &ctx->ctx;
@@ -691,7 +679,7 @@ static bool sql_dict_iterate(struct dict_iterate_context *_ctx,
 	int ret;
 
 	_ctx->has_more = FALSE;
-	if (ctx->failed)
+	if (ctx->error != NULL)
 		return FALSE;
 
 	for (;;) {
@@ -714,8 +702,8 @@ static bool sql_dict_iterate(struct dict_iterate_context *_ctx,
 			return FALSE;
 	}
 	if (ret < 0) {
-		ctx->failed = TRUE;
-		i_error("dict sql iterate failed: %s",
+		ctx->error = p_strdup_printf(ctx->pool,
+			"dict sql iterate failed: %s",
 			sql_result_get_error(ctx->result));
 		return FALSE;
 	}
@@ -752,12 +740,14 @@ static bool sql_dict_iterate(struct dict_iterate_context *_ctx,
 	return TRUE;
 }
 
-static int sql_dict_iterate_deinit(struct dict_iterate_context *_ctx)
+static int sql_dict_iterate_deinit(struct dict_iterate_context *_ctx,
+				   const char **error_r)
 {
 	struct sql_dict_iterate_context *ctx =
 		(struct sql_dict_iterate_context *)_ctx;
-	int ret = ctx->failed ? -1 : 0;
+	int ret = ctx->error != NULL ? -1 : 0;
 
+	*error_r = t_strdup(ctx->error);
 	if (ctx->result != NULL)
 		sql_result_unref(ctx->result);
 	pool_unref(&ctx->pool);
@@ -782,6 +772,7 @@ static void sql_dict_transaction_free(struct sql_dict_transaction_context *ctx)
 	if (ctx->inc_row_pool != NULL)
 		pool_unref(&ctx->inc_row_pool);
 	i_free(ctx->prev_inc_key);
+	i_free(ctx->error);
 	i_free(ctx);
 }
 
@@ -799,24 +790,37 @@ sql_dict_transaction_has_nonexistent(struct sql_dict_transaction_context *ctx)
 }
 
 static void
-sql_dict_transaction_commit_callback(const char *error,
+sql_dict_transaction_commit_callback(const struct sql_commit_result *sql_result,
 				     struct sql_dict_transaction_context *ctx)
 {
-	int ret;
+	struct dict_commit_result result;
 
-	if (error == NULL)
-		ret = sql_dict_transaction_has_nonexistent(ctx) ? 0 : 1;
+	memset(&result, 0, sizeof(result));
+	if (sql_result->error == NULL)
+		result.ret = sql_dict_transaction_has_nonexistent(ctx) ?
+			DICT_COMMIT_RET_NOTFOUND : DICT_COMMIT_RET_OK;
 	else {
-		i_error("sql dict: commit failed: %s", error);
-		ret = -1;
+		result.error = t_strdup_printf("sql dict: commit failed: %s",
+					       sql_result->error);
+		switch (sql_result->error_type) {
+		case SQL_RESULT_ERROR_TYPE_UNKNOWN:
+		default:
+			result.ret = DICT_COMMIT_RET_FAILED;
+			break;
+		case SQL_RESULT_ERROR_TYPE_WRITE_UNCERTAIN:
+			result.ret = DICT_COMMIT_RET_WRITE_UNCERTAIN;
+			break;
+		}
 	}
 
 	if (ctx->async_callback != NULL)
-		ctx->async_callback(ret, ctx->async_context);
+		ctx->async_callback(&result, ctx->async_context);
+	else if (result.ret < 0)
+		i_error("%s", result.error);
 	sql_dict_transaction_free(ctx);
 }
 
-static int
+static void
 sql_dict_transaction_commit(struct dict_transaction_context *_ctx, bool async,
 			    dict_transaction_commit_callback_t *callback,
 			    void *context)
@@ -824,37 +828,39 @@ sql_dict_transaction_commit(struct dict_transaction_context *_ctx, bool async,
 	struct sql_dict_transaction_context *ctx =
 		(struct sql_dict_transaction_context *)_ctx;
 	const char *error;
-	int ret = 1;
+	struct dict_commit_result result;
+
+	memset(&result, 0, sizeof(result));
+	result.ret = DICT_COMMIT_RET_FAILED;
+	result.error = t_strdup(ctx->error);
 
 	if (ctx->prev_inc_map != NULL)
 		sql_dict_prev_inc_flush(ctx);
 
-	if (ctx->failed) {
+	if (ctx->error != NULL) {
 		sql_transaction_rollback(&ctx->sql_ctx);
-		ret = -1;
 	} else if (!_ctx->changed) {
 		/* nothing changed, no need to commit */
 		sql_transaction_rollback(&ctx->sql_ctx);
+		result.ret = DICT_COMMIT_RET_OK;
 	} else if (async) {
 		ctx->async_callback = callback;
 		ctx->async_context = context;
 		sql_transaction_commit(&ctx->sql_ctx,
 			sql_dict_transaction_commit_callback, ctx);
-		return 1;
+		return;
+	} else if (sql_transaction_commit_s(&ctx->sql_ctx, &error) < 0) {
+		result.error = t_strdup_printf(
+			"sql dict: commit failed: %s", error);
 	} else {
-		if (sql_transaction_commit_s(&ctx->sql_ctx, &error) < 0) {
-			i_error("sql dict: commit failed: %s", error);
-			ret = -1;
-		} else {
-			if (sql_dict_transaction_has_nonexistent(ctx))
-				ret = 0;
-		}
+		if (sql_dict_transaction_has_nonexistent(ctx))
+			result.ret = DICT_COMMIT_RET_NOTFOUND;
+		else
+			result.ret = DICT_COMMIT_RET_OK;
 	}
 	sql_dict_transaction_free(ctx);
 
-	if (callback != NULL)
-		callback(ret, context);
-	return ret;
+	callback(&result, context);
 }
 
 static void sql_dict_transaction_rollback(struct dict_transaction_context *_ctx)
@@ -908,8 +914,9 @@ static int sql_dict_set_query(const struct dict_sql_build_query *build,
 		else {
 			enum dict_sql_type value_type =
 				sql_dict_map_type(fields[i].map);
-			if (sql_dict_value_escape(suffix, dict, value_type,
-				"value", fields[i].value, "", error_r) < 0)
+			if (sql_dict_value_escape(suffix, dict, fields[i].map,
+				value_type, "value", fields[i].value,
+				"", error_r) < 0)
 				return -1;
 		}
 	}
@@ -926,7 +933,7 @@ static int sql_dict_set_query(const struct dict_sql_build_query *build,
 	for (i = 0; i < count; i++) {
 		str_printfa(prefix, ",%s", sql_fields[i].name);
 		str_append_c(suffix, ',');
-		if (sql_dict_field_escape_value(suffix, dict, &sql_fields[i],
+		if (sql_dict_field_escape_value(suffix, dict, fields[0].map, &sql_fields[i],
 						extra_values[i], "", error_r) < 0)
 			return -1;
 	}
@@ -951,8 +958,9 @@ static int sql_dict_set_query(const struct dict_sql_build_query *build,
 		} else {
 			enum dict_sql_type value_type =
 				sql_dict_map_type(fields[i].map);
-			if (sql_dict_value_escape(prefix, dict, value_type,
-				"value", fields[i].value, "", error_r) < 0)
+			if (sql_dict_value_escape(prefix, dict, fields[i].map,
+				value_type, "value", fields[i].value,
+				"", error_r) < 0)
 				return -1;
 		}
 	}
@@ -1001,40 +1009,39 @@ static void sql_dict_set(struct dict_transaction_context *_ctx,
 	struct sql_dict *dict = (struct sql_dict *)_ctx->dict;
 	const struct dict_sql_map *map;
 	ARRAY_TYPE(const_string) values;
+	struct dict_sql_build_query build;
+	struct dict_sql_build_query_field field;
+	const char *query, *error;
+
+	if (ctx->error != NULL)
+		return;
 
 	map = sql_dict_find_map(dict, key, &values);
 	if (map == NULL) {
-		i_error("sql dict set: Invalid/unmapped key: %s", key);
-		ctx->failed = TRUE;
+		ctx->error = i_strdup_printf(
+			"dict-sql: Invalid/unmapped key: %s", key);
 		return;
 	}
 
 	if (ctx->prev_inc_map != NULL)
 		sql_dict_prev_inc_flush(ctx);
 
-	T_BEGIN {
-		struct dict_sql_build_query build;
-		struct dict_sql_build_query_field field;
-		const char *query, *error;
+	field.map = map;
+	field.value = value;
 
-		field.map = map;
-		field.value = value;
+	memset(&build, 0, sizeof(build));
+	build.dict = dict;
+	t_array_init(&build.fields, 1);
+	array_append(&build.fields, &field, 1);
+	build.extra_values = &values;
+	build.key1 = key[0];
 
-		memset(&build, 0, sizeof(build));
-		build.dict = dict;
-		t_array_init(&build.fields, 1);
-		array_append(&build.fields, &field, 1);
-		build.extra_values = &values;
-		build.key1 = key[0];
-
-		if (sql_dict_set_query(&build, &query, &error) < 0) {
-			i_error("dict-sql: Failed to set %s=%s: %s",
-				key, value, error);
-			ctx->failed = TRUE;
-		} else {
-			sql_update(ctx->sql_ctx, query);
-		}
-	} T_END;
+	if (sql_dict_set_query(&build, &query, &error) < 0) {
+		ctx->error = i_strdup_printf("dict-sql: Failed to set %s=%s: %s",
+					     key, value, error);
+	} else {
+		sql_update(ctx->sql_ctx, query);
+	}
 }
 
 static void sql_dict_unset(struct dict_transaction_context *_ctx,
@@ -1045,41 +1052,29 @@ static void sql_dict_unset(struct dict_transaction_context *_ctx,
 	struct sql_dict *dict = (struct sql_dict *)_ctx->dict;
 	const struct dict_sql_map *map;
 	ARRAY_TYPE(const_string) values;
+	string_t *query = t_str_new(256);
+	const char *error;
+
+	if (ctx->error != NULL)
+		return;
 
 	if (ctx->prev_inc_map != NULL)
 		sql_dict_prev_inc_flush(ctx);
 
 	map = sql_dict_find_map(dict, key, &values);
 	if (map == NULL) {
-		i_error("sql dict unset: Invalid/unmapped key: %s", key);
-		ctx->failed = TRUE;
+		ctx->error = i_strdup_printf("dict-sql: Invalid/unmapped key: %s", key);
 		return;
 	}
 
-	T_BEGIN {
-		string_t *query = t_str_new(256);
-		const char *error;
-
-		str_printfa(query, "DELETE FROM %s", map->table);
-		if (sql_dict_where_build(dict, map, &values, key[0],
-					 SQL_DICT_RECURSE_NONE, query, &error) < 0) {
-			i_error("dict-sql: Failed to delete %s: %s", key, error);
-			ctx->failed = TRUE;
-		} else {
-			sql_update(ctx->sql_ctx, str_c(query));
-		}
-	} T_END;
-}
-
-static void
-sql_dict_append(struct dict_transaction_context *_ctx,
-		const char *key ATTR_UNUSED, const char *value ATTR_UNUSED)
-{
-	struct sql_dict_transaction_context *ctx =
-		(struct sql_dict_transaction_context *)_ctx;
-
-	i_error("sql dict: Append command not implemented currently");
-	ctx->failed = TRUE;
+	str_printfa(query, "DELETE FROM %s", map->table);
+	if (sql_dict_where_build(dict, map, &values, key[0],
+				 SQL_DICT_RECURSE_NONE, query, &error) < 0) {
+		ctx->error = i_strdup_printf(
+			"dict-sql: Failed to delete %s: %s", key, error);
+	} else {
+		sql_update(ctx->sql_ctx, str_c(query));
+	}
 }
 
 static unsigned int *
@@ -1104,34 +1099,34 @@ static void sql_dict_atomic_inc_real(struct sql_dict_transaction_context *ctx,
 	struct sql_dict *dict = (struct sql_dict *)ctx->ctx.dict;
 	const struct dict_sql_map *map;
 	ARRAY_TYPE(const_string) values;
+	struct dict_sql_build_query build;
+	struct dict_sql_build_query_field field;
+	const char *query, *error;
+
+	if (ctx->error != NULL)
+		return;
 
 	map = sql_dict_find_map(dict, key, &values);
 	i_assert(map != NULL);
 
-	T_BEGIN {
-		struct dict_sql_build_query build;
-		struct dict_sql_build_query_field field;
-		const char *query, *error;
+	field.map = map;
+	field.value = t_strdup_printf("%lld", diff);
 
-		field.map = map;
-		field.value = t_strdup_printf("%lld", diff);
+	memset(&build, 0, sizeof(build));
+	build.dict = dict;
+	t_array_init(&build.fields, 1);
+	array_append(&build.fields, &field, 1);
+	build.extra_values = &values;
+	build.key1 = key[0];
+	build.inc = TRUE;
 
-		memset(&build, 0, sizeof(build));
-		build.dict = dict;
-		t_array_init(&build.fields, 1);
-		array_append(&build.fields, &field, 1);
-		build.extra_values = &values;
-		build.key1 = key[0];
-		build.inc = TRUE;
-
-		if (sql_dict_update_query(&build, &query, &error) < 0) {
-			i_error("dict-sql: Failed to increase %s: %s", key, error);
-			ctx->failed = TRUE;
-		} else {
-			sql_update_get_rows(ctx->sql_ctx, query,
-					    sql_dict_next_inc_row(ctx));
-		}
-	} T_END;
+	if (sql_dict_update_query(&build, &query, &error) < 0) {
+		ctx->error = i_strdup_printf(
+			"dict-sql: Failed to increase %s: %s", key, error);
+	} else {
+		sql_update_get_rows(ctx->sql_ctx, query,
+				    sql_dict_next_inc_row(ctx));
+	}
 }
 
 static void sql_dict_prev_inc_flush(struct sql_dict_transaction_context *ctx)
@@ -1186,10 +1181,13 @@ static void sql_dict_atomic_inc(struct dict_transaction_context *_ctx,
 	const struct dict_sql_map *map;
 	ARRAY_TYPE(const_string) values;
 
+	if (ctx->error != NULL)
+		return;
+
 	map = sql_dict_find_map(dict, key, &values);
 	if (map == NULL) {
-		i_error("sql dict atomic inc: Invalid/unmapped key: %s", key);
-		ctx->failed = TRUE;
+		ctx->error = i_strdup_printf(
+			"sql dict atomic inc: Invalid/unmapped key: %s", key);
 		return;
 	}
 
@@ -1206,7 +1204,7 @@ static void sql_dict_atomic_inc(struct dict_transaction_context *_ctx,
 					 ctx->prev_inc_key, key, &values)) {
 		sql_dict_prev_inc_flush(ctx);
 		sql_dict_atomic_inc_real(ctx, key, diff);
-	} else T_BEGIN {
+	} else {
 		struct dict_sql_build_query build;
 		struct dict_sql_build_query_field *field;
 		const char *query, *error;
@@ -1226,8 +1224,8 @@ static void sql_dict_atomic_inc(struct dict_transaction_context *_ctx,
 		field->value = t_strdup_printf("%lld", diff);
 
 		if (sql_dict_update_query(&build, &query, &error) < 0) {
-			i_error("dict-sql: Failed to increase %s: %s", key, error);
-			ctx->failed = TRUE;
+			ctx->error = i_strdup_printf(
+				"dict-sql: Failed to increase %s: %s", key, error);
 		} else {
 			sql_update_get_rows(ctx->sql_ctx, query,
 					    sql_dict_next_inc_row(ctx));
@@ -1235,28 +1233,27 @@ static void sql_dict_atomic_inc(struct dict_transaction_context *_ctx,
 
 		i_free_and_null(ctx->prev_inc_key);
 		ctx->prev_inc_map = NULL;
-	} T_END;
+	}
 }
 
 static struct dict sql_dict = {
 	.name = "sql",
 
 	{
-		sql_dict_init,
-		sql_dict_deinit,
-		sql_dict_wait,
-		sql_dict_lookup,
-		sql_dict_iterate_init,
-		sql_dict_iterate,
-		sql_dict_iterate_deinit,
-		sql_dict_transaction_init,
-		sql_dict_transaction_commit,
-		sql_dict_transaction_rollback,
-		sql_dict_set,
-		sql_dict_unset,
-		sql_dict_append,
-		sql_dict_atomic_inc,
-		sql_dict_lookup_async
+		.init = sql_dict_init,
+		.deinit = sql_dict_deinit,
+		.wait = sql_dict_wait,
+		.lookup = sql_dict_lookup,
+		.iterate_init = sql_dict_iterate_init,
+		.iterate = sql_dict_iterate,
+		.iterate_deinit = sql_dict_iterate_deinit,
+		.transaction_init = sql_dict_transaction_init,
+		.transaction_commit = sql_dict_transaction_commit,
+		.transaction_rollback = sql_dict_transaction_rollback,
+		.set = sql_dict_set,
+		.unset = sql_dict_unset,
+		.atomic_inc = sql_dict_atomic_inc,
+		.lookup_async = sql_dict_lookup_async,
 	}
 };
 
@@ -1289,4 +1286,5 @@ void dict_sql_unregister(void)
 		dict_driver_unregister(&dict_sql_drivers[i]);
 	i_free(dict_sql_drivers);
 	sql_db_cache_deinit(&dict_sql_db_cache);
+	dict_sql_settings_deinit();
 }

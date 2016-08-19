@@ -81,8 +81,7 @@ int mbox_file_open_stream(struct mbox_mailbox *mbox)
 		} else {
 			mbox->mbox_file_stream =
 				i_stream_create_fd(mbox->mbox_fd,
-						   MBOX_READ_BLOCK_SIZE,
-						   FALSE);
+						   MBOX_READ_BLOCK_SIZE);
 			i_stream_set_init_buffer_size(mbox->mbox_file_stream,
 						      MBOX_READ_BLOCK_SIZE);
 		}
@@ -155,7 +154,7 @@ int mbox_file_lookup_offset(struct mbox_mailbox *mbox,
 		mail_storage_set_critical(&mbox->storage->storage,
 			"Cached message offset lost for seq %u in mbox file %s",
 			seq, mailbox_get_path(&mbox->box));
-                mbox->mbox_hdr.dirty_flag = TRUE;
+		mbox->mbox_hdr.dirty_flag = 1;
                 mbox->mbox_broken_offsets = TRUE;
 		return 0;
 	}
@@ -186,18 +185,18 @@ int mbox_file_seek(struct mbox_mailbox *mbox, struct mail_index_view *view,
 			return -1;
 		}
 
-		if (mbox->mbox_hdr.dirty_flag)
+		if (mbox->mbox_hdr.dirty_flag != 0)
 			return 0;
 
 		mail_storage_set_critical(&mbox->storage->storage,
 			"Cached message offset %s is invalid for mbox file %s",
 			dec2str(offset), mailbox_get_path(&mbox->box));
-		mbox->mbox_hdr.dirty_flag = TRUE;
+		mbox->mbox_hdr.dirty_flag = 1;
 		mbox->mbox_broken_offsets = TRUE;
 		return 0;
 	}
 
-	if (mbox->mbox_hdr.dirty_flag) {
+	if (mbox->mbox_hdr.dirty_flag != 0) {
 		/* we're dirty - make sure this is the correct mail */
 		if (!mbox_sync_parse_match_mail(mbox, view, seq))
 			return 0;

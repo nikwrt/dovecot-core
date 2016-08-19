@@ -54,11 +54,11 @@ struct login_proxy {
 
 	proxy_callback_t *callback;
 
-	unsigned int connected:1;
-	unsigned int destroying:1;
-	unsigned int disconnecting:1;
-	unsigned int delayed_disconnect:1;
-	unsigned int num_waiting_connections_updated:1;
+	bool connected:1;
+	bool destroying:1;
+	bool disconnecting:1;
+	bool delayed_disconnect:1;
+	bool num_waiting_connections_updated:1;
 };
 
 static struct login_proxy_state *proxy_state;
@@ -168,7 +168,7 @@ static void proxy_client_input(struct login_proxy *proxy)
 		return;
 	}
 
-	if (i_stream_read_data(proxy->client_input, &data, &size, 0) < 0) {
+	if (i_stream_read_more(proxy->client_input, &data, &size) < 0) {
 		const char *errstr = i_stream_get_error(proxy->client_input);
 		login_proxy_free_errstr(&proxy, errstr, FALSE);
 		return;
@@ -240,10 +240,9 @@ static void proxy_prelogin_input(struct login_proxy *proxy)
 static void proxy_plain_connected(struct login_proxy *proxy)
 {
 	proxy->server_input =
-		i_stream_create_fd(proxy->server_fd, MAX_PROXY_INPUT_SIZE,
-				   FALSE);
+		i_stream_create_fd(proxy->server_fd, MAX_PROXY_INPUT_SIZE);
 	proxy->server_output =
-		o_stream_create_fd(proxy->server_fd, (size_t)-1, FALSE);
+		o_stream_create_fd(proxy->server_fd, (size_t)-1);
 	o_stream_set_no_error_handling(proxy->server_output, TRUE);
 
 	proxy->server_io =
@@ -295,7 +294,7 @@ proxy_log_connect_error(struct login_proxy *proxy)
 	}
 
 	str_append_c(str, ')');
-	i_error("%s", str_c(str));
+	client_log_err(proxy->client, str_c(str));
 }
 
 static void proxy_reconnect_timeout(struct login_proxy *proxy)
@@ -367,6 +366,20 @@ static int login_proxy_connect(struct login_proxy *proxy)
 {
 	struct login_proxy_record *rec = proxy->state_rec;
 
+	/* this needs to be done early, since login_proxy_free() shrinks
+	   num_waiting_connections. */
+	proxy->num_waiting_connections_updated = FALSE;
+	rec->num_waiting_connections++;
+
+	if (proxy->ip.family == 0 &&
+	    net_addr2ip(proxy->host, &proxy->ip) < 0) {
+		client_log_err(proxy->client, t_strdup_printf(
+			"proxy(%s): BUG: host %s is not an IP "
+			"(auth should have changed it)",
+			proxy->client->virtual_user, proxy->host));
+		return -1;
+	}
+
 	if (rec->last_success.tv_sec == 0) {
 		/* first connect to this IP. don't start immediately failing
 		   the check below. */
@@ -376,9 +389,9 @@ static int login_proxy_connect(struct login_proxy *proxy)
 	    rec->last_failure.tv_sec - rec->last_success.tv_sec > PROXY_IMMEDIATE_FAILURE_SECS &&
 	    rec->num_waiting_connections != 0) {
 		/* the server is down. fail immediately */
-		i_error("proxy(%s): Host %s:%u is down",
-			proxy->client->virtual_user, proxy->host, proxy->port);
-		login_proxy_free(&proxy);
+		client_log_err(proxy->client, t_strdup_printf(
+			"proxy(%s): Host %s:%u is down",
+			proxy->client->virtual_user, proxy->host, proxy->port));
 		return -1;
 	}
 
@@ -387,7 +400,6 @@ static int login_proxy_connect(struct login_proxy *proxy)
 					  &proxy->source_ip);
 	if (proxy->server_fd == -1) {
 		proxy_log_connect_error(proxy);
-		login_proxy_free(&proxy);
 		return -1;
 	}
 	proxy->server_io = io_add(proxy->server_fd, IO_WRITE,
@@ -396,10 +408,6 @@ static int login_proxy_connect(struct login_proxy *proxy)
 		proxy->to = timeout_add(proxy->connect_timeout_msecs,
 					proxy_connect_timeout, proxy);
 	}
-
-	proxy->num_waiting_connections_updated = FALSE;
-	proxy->state_rec = rec;
-	proxy->state_rec->num_waiting_connections++;
 	return 0;
 }
 
@@ -412,13 +420,15 @@ int login_proxy_new(struct client *client,
 	i_assert(client->login_proxy == NULL);
 
 	if (set->host == NULL || *set->host == '\0') {
-		i_error("proxy(%s): host not given", client->virtual_user);
+		client_log_err(client, t_strdup_printf(
+			"proxy(%s): host not given", client->virtual_user));
 		return -1;
 	}
 
 	if (client->proxy_ttl <= 1) {
-		i_error("proxy(%s): TTL reached zero - "
-			"proxies appear to be looping?", client->virtual_user);
+		client_log_err(client, t_strdup_printf(
+			"proxy(%s): TTL reached zero - "
+			"proxies appear to be looping?", client->virtual_user));
 		return -1;
 	}
 
@@ -438,14 +448,9 @@ int login_proxy_new(struct client *client,
 						 proxy->port);
 	client_ref(client);
 
-	if (set->ip.family == 0 &&
-	    net_addr2ip(set->host, &proxy->ip) < 0) {
-		i_error("proxy(%s): BUG: host %s is not an IP "
-			"(auth should have changed it)",
-			client->virtual_user, set->host);
-	} else {
-		if (login_proxy_connect(proxy) < 0)
-			return -1;
+	if (login_proxy_connect(proxy) < 0) {
+		login_proxy_free(&proxy);
+		return -1;
 	}
 
 	DLLIST_PREPEND(&login_proxies_pending, proxy);

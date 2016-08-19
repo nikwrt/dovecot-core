@@ -260,7 +260,7 @@ virtual_mailbox_alloc(struct mail_storage *_storage, struct mailbox_list *list,
 	mbox->box.storage = _storage;
 	mbox->box.list = list;
 	mbox->box.mail_vfuncs = &virtual_mail_vfuncs;
-	mbox->vfuncs = virtual_mailbox_vfuncs;
+	mbox->box.virtual_vfuncs = &virtual_mailbox_vfuncs;
 
 	index_storage_mailbox_alloc(&mbox->box, vname, flags, MAIL_INDEX_PREFIX);
 
@@ -749,7 +749,7 @@ static bool virtual_is_inconsistent(struct mailbox *box)
 static int
 virtual_list_index_has_changed(struct mailbox *box ATTR_UNUSED,
 			       struct mail_index_view *list_view ATTR_UNUSED,
-			       uint32_t seq ATTR_UNUSED)
+			       uint32_t seq ATTR_UNUSED, bool quick ATTR_UNUSED)
 {
 	/* we don't have any quick and easy optimizations for tracking
 	   virtual folders. ideally we'd completely disable mailbox list

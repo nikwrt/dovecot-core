@@ -1,4 +1,4 @@
-noinst_LIBRARIES = libpassword.a
+noinst_LTLIBRARIES = libpassword.la
 auth_moduledir = $(moduledir)/auth
 
 # automake seems to force making this unconditional..
@@ -27,6 +27,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/lib-test \
 	-I$(top_srcdir)/src/lib-dict \
 	-I$(top_srcdir)/src/lib-dns \
+	-I$(top_srcdir)/src/lib-http \
 	-I$(top_srcdir)/src/lib-sql \
 	-I$(top_srcdir)/src/lib-settings \
 	-I$(top_srcdir)/src/lib-stats \
@@ -40,22 +41,25 @@ AM_CPPFLAGS = \
 
 auth_LDFLAGS = -export-dynamic
 
-libpassword_a_SOURCES = \
+libpassword_la_SOURCES = \
 	mycrypt.c \
 	password-scheme.c \
 	password-scheme-crypt.c \
 	password-scheme-md5crypt.c \
 	password-scheme-scram.c \
 	password-scheme-otp.c \
-	password-scheme-rpa.c
+	password-scheme-rpa.c \
+	password-scheme-pbkdf2.c
 
 auth_libs = \
-	libpassword.a \
-	../lib-ntlm/libntlm.a \
-	../lib-otp/libotp.a \
+	libstats_auth.la \
+	libpassword.la \
+	../lib-ntlm/libntlm.la \
+	../lib-otp/libotp.la \
 	$(LIBDOVECOT_SQL)
 
-auth_LDADD = $(auth_libs) $(LIBDOVECOT) $(AUTH_LIBS)
+auth_CPPFLAGS = $(AM_CPPFLAGS) $(BINARY_CFLAGS)
+auth_LDADD = $(auth_libs) $(LIBDOVECOT) $(AUTH_LIBS) $(BINARY_LDFLAGS)
 auth_DEPENDENCIES = $(auth_libs) $(LIBDOVECOT_DEPS)
 
 ldap_sources = db-ldap.c passdb-ldap.c userdb-ldap.c
@@ -65,6 +69,7 @@ auth_SOURCES = \
 	auth-cache.c \
 	auth-client-connection.c \
 	auth-master-connection.c \
+	auth-policy.c \
 	auth-postfix-connection.c \
 	mech-otp-skey-common.c \
 	mech-plain-common.c \
@@ -74,7 +79,6 @@ auth_SOURCES = \
 	auth-request-stats.c \
 	auth-request-var-expand.c \
 	auth-settings.c \
-	auth-stats.c \
 	auth-fields.c \
 	auth-token.c \
 	auth-worker-client.c \
@@ -140,6 +144,7 @@ headers = \
 	mech-otp-skey-common.h \
 	mech-plain-common.h \
 	auth-penalty.h \
+	auth-policy.h \
 	auth-request.h \
 	auth-request-handler.h \
 	auth-request-stats.h \
@@ -194,7 +199,8 @@ libauthdb_imap_la_SOURCES = passdb-imap.c
 pkginc_libdir=$(pkgincludedir)
 pkginc_lib_HEADERS = $(headers)
 
-checkpassword_reply_LDADD = $(LIBDOVECOT)
+checkpassword_reply_CPPFLAGS = $(AM_CPPFLAGS) $(BINARY_CFLAGS)
+checkpassword_reply_LDADD = $(LIBDOVECOT) $(BINARY_LDFLAGS)
 checkpassword_reply_DEPENDENCIES = $(LIBDOVECOT_DEPS)
 
 checkpassword_reply_sources = \
@@ -204,9 +210,9 @@ stats_moduledir = $(moduledir)/stats
 stats_module_LTLIBRARIES = libstats_auth.la
 
 libstats_auth_la_LDFLAGS = -module -avoid-version
-libstats_auth_la_LIBADD = auth-stats.lo $(LIBDOVECOT)
-libstats_auth_la_DEPENDENCIES = auth-stats.lo
-libstats_auth_la_SOURCES =
+libstats_auth_la_LIBADD = $(LIBDOVECOT)
+libstats_auth_la_DEPENDENCIES = $(LIBDOVECOT_DEPS)
+libstats_auth_la_SOURCES = auth-stats.c
 
 test_programs = \
 	test-auth-cache \
@@ -219,16 +225,16 @@ test_libs = \
 	../lib-test/libtest.la \
 	../lib/liblib.la
 
-test_auth_cache_SOURCES = test-auth-cache.c
-test_auth_cache_LDADD = auth-cache.o $(test_libs)
+test_auth_cache_SOURCES = auth-cache.c test-auth-cache.c
+test_auth_cache_LDADD = $(test_libs)
 test_auth_cache_DEPENDENCIES = $(pkglibexec_PROGRAMS) $(test_libs)
 
-test_auth_request_var_expand_SOURCES = test-auth-request-var-expand.c
-test_auth_request_var_expand_LDADD = auth-request-var-expand.o auth-fields.o $(test_libs)
+test_auth_request_var_expand_SOURCES = auth-request-var-expand.c auth-fields.c test-auth-request-var-expand.c
+test_auth_request_var_expand_LDADD = $(test_libs)
 test_auth_request_var_expand_DEPENDENCIES = $(pkglibexec_PROGRAMS) $(test_libs)
 
-test_db_dict_SOURCES = test-db-dict.c
-test_db_dict_LDADD = db-dict-cache-key.o $(test_libs)
+test_db_dict_SOURCES = db-dict-cache-key.c test-db-dict.c
+test_db_dict_LDADD = $(test_libs)
 test_db_dict_DEPENDENCIES = $(pkglibexec_PROGRAMS) $(test_libs)
 
 check: check-am check-test

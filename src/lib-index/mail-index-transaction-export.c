@@ -64,7 +64,7 @@ log_get_hdr_update_buffer(struct mail_index_transaction *t, bool prepend)
 
 	buf = buffer_create_dynamic(pool_datastack_create(), 256);
 	for (offset = 0; offset <= sizeof(t->pre_hdr_change); offset++) {
-		if (offset < sizeof(t->pre_hdr_change) && mask[offset]) {
+		if (offset < sizeof(t->pre_hdr_change) && mask[offset] != 0) {
 			if (state == 0) {
 				u.offset = offset;
 				state++;
@@ -138,16 +138,14 @@ static void log_append_ext_intro(struct mail_index_export_context *ctx,
 		/* generate a new intro structure */
 		intro = buffer_append_space_unsafe(buf, sizeof(*intro));
 		intro->ext_id = idx;
+		intro->record_size = rext->record_size;
+		intro->record_align = rext->record_align;
 		if (idx == (uint32_t)-1) {
 			intro->hdr_size = rext->hdr_size;
-			intro->record_size = rext->record_size;
-			intro->record_align = rext->record_align;
 			intro->name_size = strlen(rext->name);
 		} else {
 			ext = array_idx(&t->view->index->map->extensions, idx);
 			intro->hdr_size = ext->hdr_size;
-			intro->record_size = ext->record_size;
-			intro->record_align = ext->record_align;
 			intro->name_size = 0;
 		}
 		intro->flags = MAIL_TRANSACTION_EXT_INTRO_FLAG_NO_SHRINK;
@@ -294,7 +292,7 @@ mail_transaction_log_append_ext_intros(struct mail_index_export_context *ctx)
 			ext_reset = reset[ext_id];
 		else
 			ext_reset.new_reset_id = 0;
-		if ((ext_id < resize_count && resize[ext_id].name_size) ||
+		if ((ext_id < resize_count && resize[ext_id].name_size > 0) ||
 		    ext_reset.new_reset_id != 0 ||
 		    (ext_id < hdrs_count && hdrs[ext_id].alloc_size > 0)) {
 			if (ext_reset.new_reset_id != 0) {

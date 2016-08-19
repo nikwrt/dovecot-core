@@ -30,12 +30,12 @@ struct zlib_istream {
 	uint32_t crc32;
 	struct stat last_parent_statbuf;
 
-	unsigned int gz:1;
-	unsigned int log_errors:1;
-	unsigned int marked:1;
-	unsigned int header_read:1;
-	unsigned int trailer_read:1;
-	unsigned int zs_closed:1;
+	bool gz:1;
+	bool log_errors:1;
+	bool marked:1;
+	bool header_read:1;
+	bool trailer_read:1;
+	bool zs_closed:1;
 };
 
 static void i_stream_zlib_init(struct zlib_istream *zstream);
@@ -58,8 +58,7 @@ static void zlib_read_error(struct zlib_istream *zstream, const char *error)
 	io_stream_set_error(&zstream->istream.iostream,
 			    "zlib.read(%s): %s at %"PRIuUOFF_T,
 			    i_stream_get_name(&zstream->istream.istream), error,
-			    zstream->istream.abs_start_offset +
-			    zstream->istream.istream.v_offset);
+			    i_stream_get_absolute_offset(&zstream->istream.istream));
 	if (zstream->log_errors)
 		i_error("%s", zstream->istream.iostream.error);
 }
@@ -72,8 +71,8 @@ static int i_stream_zlib_read_header(struct istream_private *stream)
 	unsigned int pos, fextra_size;
 	int ret;
 
-	ret = i_stream_read_data(stream->parent, &data, &size,
-				 zstream->prev_size);
+	ret = i_stream_read_bytes(stream->parent, &data, &size,
+				  zstream->prev_size + 1);
 	if (size == zstream->prev_size) {
 		stream->istream.stream_errno = stream->parent->stream_errno;
 		if (ret == -1 && stream->istream.stream_errno == 0) {
@@ -139,8 +138,8 @@ static int i_stream_zlib_read_trailer(struct zlib_istream *zstream)
 	size_t size;
 	int ret;
 
-	ret = i_stream_read_data(stream->parent, &data, &size,
-				 GZ_TRAILER_SIZE-1);
+	ret = i_stream_read_bytes(stream->parent, &data, &size,
+				  GZ_TRAILER_SIZE);
 	if (size == zstream->prev_size) {
 		stream->istream.stream_errno = stream->parent->stream_errno;
 		if (ret == -1 && stream->istream.stream_errno == 0) {
@@ -230,8 +229,7 @@ static ssize_t i_stream_zlib_read(struct istream_private *stream)
 			   have a seek mark. */
 			i_stream_compress(stream);
 		}
-		if (stream->max_buffer_size == 0 ||
-		    stream->buffer_size < stream->max_buffer_size)
+		if (stream->buffer_size < i_stream_get_max_buffer_size(&stream->istream))
 			i_stream_grow_buffer(stream, CHUNK_SIZE);
 
 		if (stream->pos == stream->buffer_size) {
@@ -245,7 +243,7 @@ static ssize_t i_stream_zlib_read(struct istream_private *stream)
 		}
 	}
 
-	if (i_stream_read_data(stream->parent, &data, &size, 0) < 0) {
+	if (i_stream_read_more(stream->parent, &data, &size) < 0) {
 		if (stream->parent->stream_errno != 0) {
 			stream->istream.stream_errno =
 				stream->parent->stream_errno;
@@ -283,7 +281,7 @@ static ssize_t i_stream_zlib_read(struct istream_private *stream)
 		break;
 	case Z_NEED_DICT:
 		zlib_read_error(zstream, "can't read file without dict");
-		stream->istream.stream_errno = EINVAL;
+		stream->istream.stream_errno = EIO;
 		return -1;
 	case Z_DATA_ERROR:
 		zlib_read_error(zstream, "corrupted data");

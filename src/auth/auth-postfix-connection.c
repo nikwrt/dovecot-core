@@ -29,7 +29,7 @@ struct auth_postfix_connection {
 	struct ostream *output;
 	struct io *io;
 
-	unsigned int destroyed:1;
+	bool destroyed:1;
 };
 
 static void postfix_input(struct auth_postfix_connection *conn);
@@ -39,7 +39,7 @@ static void auth_postfix_connection_unref(struct auth_postfix_connection **_conn
 
 static struct auth_postfix_connection *auth_postfix_connections;
 
-static int
+static bool
 postfix_input_auth_request(struct auth_postfix_connection *conn,
 			   const char *username,
 			   struct auth_request **request_r, const char **error_r)
@@ -176,8 +176,8 @@ auth_postfix_connection_create(struct auth *auth, int fd)
 	conn->refcount = 1;
 	conn->fd = fd;
 	conn->auth = auth;
-	conn->input = i_stream_create_fd(fd, MAX_INBUF_SIZE, FALSE);
-	conn->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	conn->input = i_stream_create_fd(fd, MAX_INBUF_SIZE);
+	conn->output = o_stream_create_fd(fd, (size_t)-1);
 	o_stream_set_no_error_handling(conn->output, TRUE);
 	conn->io = io_add(fd, IO_READ, postfix_input, conn);
 	DLLIST_PREPEND(&auth_postfix_connections, conn);

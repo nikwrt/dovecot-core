@@ -24,6 +24,12 @@ struct http_server_settings {
 	/* request limits */
 	struct http_request_limits request_limits;
 
+	/* the kernel send/receive buffer sizes used for the connection sockets.
+	   Configuring this is mainly useful for the test suite. The kernel
+	   defaults are used when these settings are 0. */
+	size_t socket_send_buffer_size;
+	size_t socket_recv_buffer_size;
+
 	bool debug;
 };
 
@@ -68,6 +74,9 @@ typedef void (*http_server_tunnel_callback_t)(void *context,
 
 struct http_server *http_server_init(const struct http_server_settings *set);
 void http_server_deinit(struct http_server **_server);
+/* shut down the server; accept no new requests and drop connections once
+   they become idle */
+void http_server_shut_down(struct http_server *server);
 
 struct http_server_connection *
 http_server_connection_create(struct http_server *server,

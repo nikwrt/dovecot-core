@@ -18,6 +18,7 @@
 #include "master-service-settings.h"
 #include "askpass.h"
 #include "capabilities.h"
+#include "master-client.h"
 #include "service.h"
 #include "service-anvil.h"
 #include "service-listen.h"
@@ -526,6 +527,7 @@ static void main_init(const struct master_settings *set)
 	create_pid_file(pidfile_path);
 	create_config_symlink(set);
 	instance_update(set);
+	master_clients_init();
 
 	services_monitor_start(services);
 }
@@ -542,6 +544,7 @@ static void global_dead_pipe_close(void)
 
 static void main_deinit(void)
 {
+	master_clients_deinit();
 	instance_update_now(instances);
 	timeout_remove(&to_instance);
 	master_instance_list_deinit(&instances);
@@ -631,9 +634,6 @@ static void print_build_options(void)
 #endif
 #ifdef IOLOOP_NOTIFY_KQUEUE
 		" notify=kqueue"
-#endif
-#ifdef HAVE_IPV6
-		" ipv6"
 #endif
 #ifdef HAVE_GNUTLS
 		" gnutls"
@@ -746,7 +746,8 @@ int main(int argc, char *argv[])
 	}
 	master_service = master_service_init(MASTER_SERVICE_NAME,
 				MASTER_SERVICE_FLAG_STANDALONE |
-				MASTER_SERVICE_FLAG_DONT_LOG_TO_STDERR,
+				MASTER_SERVICE_FLAG_DONT_LOG_TO_STDERR |
+				MASTER_SERVICE_FLAG_NO_INIT_DATASTACK_FRAME,
 				&argc, &argv, "+Fanp");
 	i_unset_failure_prefix();
 

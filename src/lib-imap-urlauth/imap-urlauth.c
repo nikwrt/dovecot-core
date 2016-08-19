@@ -205,14 +205,14 @@ imap_urlauth_check_hostport(struct imap_urlauth_context *uctx,
 	/* validate host */
 	/* FIXME: allow host ip/ip6 as well? */
 	if (strcmp(uctx->url_host, URL_HOST_ALLOW_ANY) != 0 &&
-	    strcmp(url->host_name, uctx->url_host) != 0) {
+	    strcmp(url->host.name, uctx->url_host) != 0) {
 		*error_r = "Invalid URL: Inappropriate host name";
 		return FALSE;
 	}
 
 	/* validate port */
-	if ((!url->have_port && uctx->url_port != 143) ||
-	    (url->have_port && uctx->url_port != url->port)) {
+	if ((url->port == 0 && uctx->url_port != 143) ||
+	    (url->port != 0 && uctx->url_port != url->port)) {
 		*error_r = "Invalid URL: Inappropriate server port";
 		return FALSE;
 	}

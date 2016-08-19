@@ -49,7 +49,13 @@ enum mailbox_flags {
 	/* Force opening mailbox and ignoring any ACLs */
 	MAILBOX_FLAG_IGNORE_ACLS	= 0x100,
 	/* Open mailbox even if it's already marked as deleted */
-	MAILBOX_FLAG_OPEN_DELETED	= 0x200
+	MAILBOX_FLAG_OPEN_DELETED	= 0x200,
+	/* Mailbox is opened for deletion, which should be performed as
+	   efficiently as possible, even allowing the mailbox state to become
+	   inconsistent. For example this disables lazy_expunge plugin and
+	   quota updates (possibly resulting in broken quota). and This is
+	   useful for example when deleting entire user accounts. */
+	MAILBOX_FLAG_DELETE_UNSAFE	= 0x400
 };
 
 enum mailbox_feature {
@@ -153,7 +159,6 @@ enum mail_fetch_field {
 	MAIL_FETCH_FROM_ENVELOPE	= 0x00008000,
 	MAIL_FETCH_HEADER_MD5		= 0x00010000,
 	MAIL_FETCH_STORAGE_ID		= 0x00020000,
-#define MAIL_FETCH_UIDL_FILE_NAME MAIL_FETCH_STORAGE_ID /* FIXME: remove in v2.3 */
 	MAIL_FETCH_UIDL_BACKEND		= 0x00040000,
 	MAIL_FETCH_MAILBOX_NAME		= 0x00080000,
 	MAIL_FETCH_SEARCH_RELEVANCY	= 0x00100000,
@@ -246,21 +251,21 @@ struct mailbox_status {
 	enum mail_flags permanent_flags;
 
 	/* All keywords can be permanently modified (STATUS_PERMANENT_FLAGS) */
-	unsigned int permanent_keywords:1;
+	bool permanent_keywords:1;
 	/* More keywords can be created (STATUS_PERMANENT_FLAGS) */
-	unsigned int allow_new_keywords:1;
+	bool allow_new_keywords:1;
 	/* Modseqs aren't permanent (index is in memory) (STATUS_HIGHESTMODSEQ) */
-	unsigned int nonpermanent_modseqs:1;
+	bool nonpermanent_modseqs:1;
 	/* Modseq tracking has never been enabled for this mailbox
 	   yet. (STATUS_HIGHESTMODSEQ) */
-	unsigned int no_modseq_tracking:1;
+	bool no_modseq_tracking:1;
 
 	/* Messages have GUIDs (always set) */
-	unsigned int have_guids:1;
+	bool have_guids:1;
 	/* mailbox_save_set_guid() works (always set) */
-	unsigned int have_save_guids:1;
+	bool have_save_guids:1;
 	/* GUIDs are always 128bit (always set) */
-	unsigned int have_only_guid128:1;
+	bool have_only_guid128:1;
 };
 
 struct mailbox_cache_field {
@@ -332,7 +337,7 @@ struct mailbox_sync_rec {
 };
 struct mailbox_sync_status {
 	/* There are expunges that haven't been synced yet */
-	unsigned int sync_delayed_expunges:1;
+	bool sync_delayed_expunges:1;
 };
 
 struct mailbox_expunge_rec {
@@ -359,10 +364,10 @@ struct mail {
 	struct mailbox_transaction_context *transaction;
 	uint32_t seq, uid;
 
-	unsigned int expunged:1;
-	unsigned int saving:1; /* This mail is still being saved */
-	unsigned int has_nuls:1; /* message data is known to contain NULs */
-	unsigned int has_no_nuls:1; /* -''- known to not contain NULs */
+	bool expunged:1;
+	bool saving:1; /* This mail is still being saved */
+	bool has_nuls:1; /* message data is known to contain NULs */
+	bool has_no_nuls:1; /* -''- known to not contain NULs */
 
 	/* If the lookup is aborted, error is set to MAIL_ERROR_NOTPOSSIBLE */
 	enum mail_lookup_abort lookup_abort;
@@ -851,10 +856,21 @@ int mail_get_header_stream(struct mail *mail,
 int mail_get_stream(struct mail *mail, struct message_size *hdr_size,
 		    struct message_size *body_size, struct istream **stream_r)
 	ATTR_NULL(2, 3);
+/* Same as mail_get_stream(), but specify a reason why the mail is being read.
+   This can be useful for debugging purposes. */
+int mail_get_stream_because(struct mail *mail, struct message_size *hdr_size,
+			    struct message_size *body_size,
+			    const char *reason, struct istream **stream_r)
+	ATTR_NULL(2, 3);
 /* Similar to mail_get_stream(), but the stream may or may not contain the
    message body. */
 int mail_get_hdr_stream(struct mail *mail, struct message_size *hdr_size,
 			struct istream **stream_r) ATTR_NULL(2);
+/* Same as mail_get_hdr_stream(), but specify a reason why the header is being
+   read. This can be useful for debugging purposes. */
+int mail_get_hdr_stream_because(struct mail *mail,
+				struct message_size *hdr_size,
+				const char *reason, struct istream **stream_r);
 /* Returns the message part's body decoded to 8bit binary. If the
    Content-Transfer-Encoding isn't supported, returns -1 and sets error to
    MAIL_ERROR_CONVERSION. If the part refers to a multipart, all of its
@@ -896,10 +912,9 @@ void mail_expunge(struct mail *mail);
 /* Add missing fields to cache. */
 void mail_precache(struct mail *mail);
 /* Mark a cached field corrupted and have it recalculated. */
-void mail_set_cache_corrupted(struct mail *mail, enum mail_fetch_field field);
-void mail_set_cache_corrupted_reason(struct mail *mail,
-				     enum mail_fetch_field field,
-				     const char *reason);
+void mail_set_cache_corrupted(struct mail *mail,
+			      enum mail_fetch_field field,
+			      const char *reason);
 
 /* Return 128 bit GUID using input string. If guid is already 128 bit hex
    encoded, it's returned as-is. Otherwise SHA1 sum is taken and its last

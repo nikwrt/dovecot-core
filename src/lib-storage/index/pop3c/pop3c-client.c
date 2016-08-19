@@ -79,7 +79,7 @@ struct pop3c_client {
 	const char *input_line;
 	struct istream *dot_input;
 
-	unsigned int running:1;
+	bool running:1;
 };
 
 static void
@@ -570,7 +570,6 @@ static int pop3c_client_ssl_init(struct pop3c_client *client)
 	if (client->set.ssl_verify) {
 		ssl_set.verbose_invalid_cert = TRUE;
 		ssl_set.verify_remote_cert = TRUE;
-		ssl_set.require_valid_cert = TRUE;
 	}
 
 	if (client->set.debug)
@@ -640,9 +639,9 @@ static void pop3c_client_connect_ip(struct pop3c_client *client)
 	}
 
 	client->input = client->raw_input =
-		i_stream_create_fd(client->fd, POP3C_MAX_INBUF_SIZE, FALSE);
+		i_stream_create_fd(client->fd, POP3C_MAX_INBUF_SIZE);
 	client->output = client->raw_output =
-		o_stream_create_fd(client->fd, (size_t)-1, FALSE);
+		o_stream_create_fd(client->fd, (size_t)-1);
 	o_stream_set_no_error_handling(client->output, TRUE);
 
 	if (*client->set.rawlog_dir != '\0' &&
@@ -870,6 +869,11 @@ int pop3c_client_cmd_stream(struct pop3c_client *client, const char *cmdline,
 {
 	struct pop3c_client_sync_cmd_ctx ctx;
 	const char *reply;
+
+	if (client->state == POP3C_CLIENT_STATE_DISCONNECTED) {
+		*error_r = "Disconnected from server";
+		return -1;
+	}
 
 	memset(&ctx, 0, sizeof(ctx));
 	*input_r = pop3c_client_cmd_stream_async(client, cmdline,

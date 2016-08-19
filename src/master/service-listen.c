@@ -4,6 +4,7 @@
 #include "array.h"
 #include "fd-set-nonblock.h"
 #include "fd-close-on-exec.h"
+#include "ioloop.h"
 #include "net.h"
 #ifdef HAVE_SYSTEMD
 #include "sd-daemon.h"
@@ -337,6 +338,28 @@ static int services_verify_systemd(struct service_list *service_list)
 }
 #endif
 
+static int services_listen_master(struct service_list *service_list)
+{
+	const char *path;
+	mode_t old_umask;
+
+	path = t_strdup_printf("%s/master", service_list->set->base_dir);
+	old_umask = umask(0600 ^ 0777);
+	service_list->master_fd = net_listen_unix(path, 16);
+	if (service_list->master_fd == -1 && errno == EADDRINUSE) {
+		/* already in use. all the other sockets were fine, so just
+		   delete this and retry. */
+		i_unlink_if_exists(path);
+		service_list->master_fd = net_listen_unix(path, 16);
+	}
+	umask(old_umask);
+
+	if (service_list->master_fd == -1)
+		return 0;
+	fd_close_on_exec(service_list->master_fd, TRUE);
+	return 1;
+}
+
 int services_listen(struct service_list *service_list)
 {
 	struct service *const *services;
@@ -347,6 +370,8 @@ int services_listen(struct service_list *service_list)
 		if (ret2 < ret)
 			ret = ret2;
 	}
+	if (ret > 0)
+		ret = services_listen_master(service_list);
 
 #ifdef HAVE_SYSTEMD
 	if (ret > 0)
@@ -355,8 +380,8 @@ int services_listen(struct service_list *service_list)
 	return ret;
 }
 
-static int listener_equals(const struct service_listener *l1,
-			   const struct service_listener *l2)
+static bool listener_equals(const struct service_listener *l1,
+			    const struct service_listener *l2)
 {
 	if (l1->type != l2->type)
 		return FALSE;

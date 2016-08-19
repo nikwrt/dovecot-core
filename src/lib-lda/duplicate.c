@@ -44,7 +44,7 @@ struct duplicate_file {
 
 	int new_fd;
 	struct dotlock *dotlock;
-	unsigned int changed:1;
+	bool changed:1;
 };
 
 struct duplicate_context {
@@ -73,7 +73,7 @@ static unsigned int duplicate_hash(const struct duplicate *d)
 
 	while (s != end) {
 		h = (h << 4) + *s;
-		if ((g = h & 0xf0000000UL)) {
+		if ((g = h & 0xf0000000UL) != 0) {
 			h = h ^ (g >> 24);
 			h = h ^ g;
 		}
@@ -93,7 +93,7 @@ duplicate_read_records(struct duplicate_file *file, struct istream *input,
 	unsigned int change_count;
 
 	change_count = 0;
-	while (i_stream_read_data(input, &data, &size, record_size) > 0) {
+	while (i_stream_read_bytes(input, &data, &size, record_size) > 0) {
 		if (record_size == sizeof(hdr))
 			memcpy(&hdr, data, sizeof(hdr));
 		else {
@@ -119,8 +119,7 @@ duplicate_read_records(struct duplicate_file *file, struct istream *input,
 			return -1;
 		}
 
-		if (i_stream_read_data(input, &data, &size,
-				       hdr.id_size + hdr.user_size - 1) <= 0) {
+		if (i_stream_read_bytes(input, &data, &size, hdr.id_size + hdr.user_size) <= 0) {
 			i_error("unexpected end of file in %s", file->path);
 			return -1;
 		}
@@ -139,7 +138,7 @@ duplicate_read_records(struct duplicate_file *file, struct istream *input,
 			d->user = p_strndup(file->pool,
 					    data + hdr.id_size, hdr.user_size);
 			d->time = hdr.stamp;
-			hash_table_insert(file->hash, d, d);
+			hash_table_update(file->hash, d, d);
 		} else {
                         change_count++;
 		}
@@ -170,8 +169,8 @@ static int duplicate_read(struct duplicate_file *file)
 	}
 
 	/* <timestamp> <id_size> <user_size> <id> <user> */
-	input = i_stream_create_fd(fd, DUPLICATE_BUFSIZE, FALSE);
-	if (i_stream_read_data(input, &data, &size, sizeof(hdr)) > 0) {
+	input = i_stream_create_fd(fd, DUPLICATE_BUFSIZE);
+	if (i_stream_read_bytes(input, &data, &size, sizeof(hdr)) > 0) {
 		memcpy(&hdr, data, sizeof(hdr));
 		if (hdr.version == 0 || hdr.version > DUPLICATE_VERSION + 10) {
 			/* FIXME: backwards compatibility with v1.0 */
@@ -277,7 +276,7 @@ void duplicate_mark(struct duplicate_context *ctx,
 	d->time = timestamp;
 
 	ctx->file->changed = TRUE;
-	hash_table_insert(ctx->file->hash, d, d);
+	hash_table_update(ctx->file->hash, d, d);
 }
 
 void duplicate_flush(struct duplicate_context *ctx)
@@ -318,7 +317,8 @@ void duplicate_flush(struct duplicate_context *ctx)
 	hash_table_iterate_deinit(&iter);
 
 	if (o_stream_nfinish(output) < 0) {
-		i_error("write(%s) failed: %m", file->path);
+		i_error("write(%s) failed: %s", file->path,
+			o_stream_get_error(output));
 		o_stream_unref(&output);
 		duplicate_file_free(&ctx->file);
 		return;
@@ -342,7 +342,8 @@ struct duplicate_context *duplicate_init(struct mail_user *user)
 	}
 
 	ctx = i_new(struct duplicate_context, 1);
-	ctx->path = i_strconcat(home, "/"DUPLICATE_FNAME, NULL);
+	ctx->path = home == NULL ? NULL :
+		i_strconcat(home, "/"DUPLICATE_FNAME, NULL);
 	ctx->dotlock_set = default_duplicate_dotlock_set;
 
 	mail_set = mail_user_set_get_storage_set(user);

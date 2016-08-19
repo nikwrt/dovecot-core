@@ -193,8 +193,9 @@ static bool parse_section(const char *type, const char *name,
 				ctx->cur_key->parsed_format =
 					DB_DICT_VALUE_FORMAT_JSON;
 			} else {
-				return t_strconcat("Unknown key format: ",
-						   ctx->cur_key->format, NULL);
+				*errormsg = t_strconcat("Unknown key format: ",
+					ctx->cur_key->format, NULL);
+				return FALSE;
 			}
 		}
 		ctx->cur_key = NULL;
@@ -268,6 +269,7 @@ db_dict_settings_parse(struct db_dict_settings *set)
 
 struct dict_connection *db_dict_init(const char *config_path)
 {
+	struct dict_settings dict_set;
 	struct dict_settings_parser_ctx ctx;
 	struct dict_connection *conn;
 	const char *error;
@@ -305,8 +307,11 @@ struct dict_connection *db_dict_init(const char *config_path)
 
 	if (conn->set.uri == NULL)
 		i_fatal("dict %s: Empty uri setting", config_path);
-	if (dict_init(conn->set.uri, DICT_DATA_TYPE_STRING, "",
-		      global_auth_settings->base_dir, &conn->dict, &error) < 0)
+
+	memset(&dict_set, 0, sizeof(dict_set));
+	dict_set.username = "";
+	dict_set.base_dir = global_auth_settings->base_dir;
+	if (dict_init(conn->set.uri, &dict_set, &conn->dict, &error) < 0)
 		i_fatal("dict %s: Failed to init dict: %s", config_path, error);
 
 	conn->next = connections;
@@ -393,6 +398,7 @@ static int db_dict_iter_lookup_key_values(struct db_dict_value_iter *iter)
 {
 	struct db_dict_iter_key *key;
 	string_t *path;
+	const char *error;
 	int ret;
 
 	/* sort the keys so that we'll first lookup the keys without
@@ -409,14 +415,14 @@ static int db_dict_iter_lookup_key_values(struct db_dict_value_iter *iter)
 		str_truncate(path, strlen(DICT_PATH_SHARED));
 		var_expand(path, key->key->key, iter->var_expand_table);
 		ret = dict_lookup(iter->conn->dict, iter->pool,
-				  str_c(path), &key->value);
+				  str_c(path), &key->value, &error);
 		if (ret > 0) {
 			auth_request_log_debug(iter->auth_request, AUTH_SUBSYS_DB,
 					       "Lookup: %s = %s", str_c(path),
 					       key->value);
 		} else if (ret < 0) {
 			auth_request_log_error(iter->auth_request, AUTH_SUBSYS_DB,
-				"Failed to lookup key %s", str_c(path));
+				"Failed to lookup key %s: %s", str_c(path), error);
 			return -1;
 		} else if (key->key->default_value != NULL) {
 			auth_request_log_debug(iter->auth_request, AUTH_SUBSYS_DB,
@@ -456,7 +462,14 @@ int db_dict_value_iter_init(struct dict_connection *conn,
 	p_array_init(&iter->keys, pool, array_count(&conn->set.keys));
 	array_foreach(&conn->set.keys, key) {
 		iterkey = array_append_space(&iter->keys);
-		iterkey->key = key;
+		struct db_dict_key *new_key = p_new(iter->pool, struct db_dict_key, 1);
+		memcpy(new_key, key, sizeof(struct db_dict_key));
+		string_t *expanded_key = str_new(iter->pool, strlen(key->key));
+		auth_request_var_expand_with_table(expanded_key, key->key, auth_request,
+						   iter->var_expand_table,
+						   NULL);
+		new_key->key = str_c(expanded_key);
+		iterkey->key = new_key;
 	}
 	T_BEGIN {
 		db_dict_iter_find_used_keys(iter);

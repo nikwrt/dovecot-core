@@ -69,8 +69,9 @@ static void cmd_dump_imapzlib(int argc ATTR_UNUSED, char *argv[])
 	input2 = i_stream_create_deflate(input, TRUE);
 	i_stream_unref(&input);
 
-	while (i_stream_read_data(input2, &data, &size, 0) != -1) {
-		fwrite(data, 1, size, stdout);
+	while (i_stream_read_more(input2, &data, &size) != -1) {
+		if (fwrite(data, 1, size, stdout) != size)
+			break;
 		i_stream_skip(input2, size);
 	}
 	i_stream_unref(&input2);
@@ -122,8 +123,8 @@ static void server_input(struct client *client)
 
 	if (i_stream_read(client->input) == -1) {
 		if (client->input->stream_errno != 0) {
-			errno = client->input->stream_errno;
-			i_fatal("read(server) failed: %m");
+			i_fatal("read(server) failed: %s",
+				i_stream_get_error(client->input));
 		}
 
 		i_info("Server disconnected");
@@ -163,8 +164,8 @@ static void cmd_zlibconnect(int argc ATTR_UNUSED, char *argv[])
 
 	memset(&client, 0, sizeof(client));
 	client.fd = fd;
-	client.input = i_stream_create_fd(fd, (size_t)-1, FALSE);
-	client.output = o_stream_create_fd(fd, 0, FALSE);
+	client.input = i_stream_create_fd(fd, (size_t)-1);
+	client.output = o_stream_create_fd(fd, 0);
 	o_stream_set_no_error_handling(client.output, TRUE);
 	client.io_client = io_add(STDIN_FILENO, IO_READ, client_input, &client);
 	client.io_server = io_add(fd, IO_READ, server_input, &client);

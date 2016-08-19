@@ -19,9 +19,9 @@ struct lz4_istream {
 	buffer_t *chunk_buf;
 	uint32_t chunk_size, chunk_left, max_uncompressed_chunk_size;
 
-	unsigned int log_errors:1;
-	unsigned int marked:1;
-	unsigned int header_read:1;
+	bool log_errors:1;
+	bool marked:1;
+	bool header_read:1;
 };
 
 static void i_stream_lz4_close(struct iostream_private *stream,
@@ -40,8 +40,7 @@ static void lz4_read_error(struct lz4_istream *zstream, const char *error)
 	io_stream_set_error(&zstream->istream.iostream,
 			    "lz4.read(%s): %s at %"PRIuUOFF_T,
 			    i_stream_get_name(&zstream->istream.istream), error,
-			    zstream->istream.abs_start_offset +
-			    zstream->istream.istream.v_offset);
+			    i_stream_get_absolute_offset(&zstream->istream.istream));
 	if (zstream->log_errors)
 		i_error("%s", zstream->istream.iostream.error);
 }
@@ -53,8 +52,8 @@ static int i_stream_lz4_read_header(struct lz4_istream *zstream)
 	size_t size;
 	int ret;
 
-	ret = i_stream_read_data(zstream->istream.parent, &data, &size,
-				 sizeof(*hdr)-1);
+	ret = i_stream_read_bytes(zstream->istream.parent, &data, &size,
+				  sizeof(*hdr));
 	if (ret < 0) {
 		zstream->istream.istream.stream_errno =
 			zstream->istream.parent->stream_errno;
@@ -100,8 +99,8 @@ static ssize_t i_stream_lz4_read(struct istream_private *stream)
 	}
 
 	if (zstream->chunk_left == 0) {
-		ret = i_stream_read_data(stream->parent, &data, &size,
-					 IOSTREAM_LZ4_CHUNK_PREFIX_LEN);
+		ret = i_stream_read_bytes(stream->parent, &data, &size,
+					  IOSTREAM_LZ4_CHUNK_PREFIX_LEN);
 		if (ret < 0) {
 			stream->istream.stream_errno =
 				stream->parent->stream_errno;
@@ -130,8 +129,7 @@ static ssize_t i_stream_lz4_read(struct istream_private *stream)
 
 	/* read the whole compressed chunk into memory */
 	while (zstream->chunk_left > 0 &&
-	       (ret = i_stream_read_data(zstream->istream.parent,
-					 &data, &size, 0)) > 0) {
+	       (ret = i_stream_read_more(zstream->istream.parent, &data, &size)) > 0) {
 		if (size > zstream->chunk_left)
 			size = zstream->chunk_left;
 		buffer_append(zstream->chunk_buf, data, size);
@@ -150,7 +148,7 @@ static ssize_t i_stream_lz4_read(struct istream_private *stream)
 	}
 	/* if we already have max_buffer_size amount of data, fail here */
 	i_stream_compress(stream);
-	if (stream->pos >= stream->max_buffer_size)
+	if (stream->pos >= i_stream_get_max_buffer_size(&stream->istream))
 		return -2;
 	/* allocate enough space for the old data and the new
 	   decompressed chunk. we don't know the original compressed size,

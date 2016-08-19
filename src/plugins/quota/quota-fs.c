@@ -73,9 +73,9 @@ struct fs_quota_root {
 	gid_t gid;
 	struct fs_quota_mountpoint *mount;
 
-	unsigned int inode_per_mail:1;
-	unsigned int user_disabled:1;
-	unsigned int group_disabled:1;
+	bool inode_per_mail:1;
+	bool user_disabled:1;
+	bool group_disabled:1;
 #ifdef FS_QUOTA_NETBSD
 	struct quotahandle *qh;
 #endif
@@ -122,6 +122,7 @@ static int fs_quota_init(struct quota_root *_root, const char *args,
 			return -1;
 		}
 	}
+	_root->auto_updating = TRUE;
 	return 0;
 }
 
@@ -692,7 +693,7 @@ fs_quota_get_netbsd(struct fs_quota_root *root, bool group,
 	qk.qk_idtype = group ? QUOTA_IDTYPE_GROUP : QUOTA_IDTYPE_USER;
 	qk.qk_id = group ? root->gid : root->uid;
 
-	for (i = 0; i < 2; i++) {
+	for (int i = 0; i < 2; i++) {
 		qk.qk_objtype = i == 0 ? QUOTA_OBJTYPE_BLOCKS : QUOTA_OBJTYPE_FILES;
 
 		if (quota_get(qh, &qk, &qv) != 0) {

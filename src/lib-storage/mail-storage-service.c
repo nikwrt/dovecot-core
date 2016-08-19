@@ -63,9 +63,9 @@ struct mail_storage_service_ctx {
 	pool_t userdb_next_pool;
 	const char *const **userdb_next_fieldsp;
 
-	unsigned int debug:1;
-	unsigned int log_initialized:1;
-	unsigned int config_permission_denied:1;
+	bool debug:1;
+	bool log_initialized:1;
+	bool config_permission_denied:1;
 };
 
 struct mail_storage_service_user {
@@ -82,8 +82,10 @@ struct mail_storage_service_user {
 	const struct setting_parser_info *user_info;
 	struct setting_parser_context *set_parser;
 
-	unsigned int anonymous:1;
-	unsigned int admin:1;
+	unsigned int session_id_counter;
+
+	bool anonymous:1;
+	bool admin:1;
 };
 
 struct module *mail_storage_service_modules = NULL;
@@ -410,7 +412,7 @@ get_var_expand_table(struct master_service *service,
 	};
 	struct var_expand_table *tab;
 
-	tab = t_malloc(sizeof(static_tab));
+	tab = t_malloc_no0(sizeof(static_tab));
 	memcpy(tab, static_tab, sizeof(static_tab));
 
 	tab[0].value = input->username;
@@ -658,8 +660,15 @@ mail_storage_service_init_post(struct mail_storage_service_ctx *ctx,
 	mail_user->admin = user->admin;
 	mail_user->auth_token = p_strdup(mail_user->pool, user->auth_token);
 	mail_user->auth_user = p_strdup(mail_user->pool, user->auth_user);
-	mail_user->session_id =
-		p_strdup(mail_user->pool, user->input.session_id);
+	if (user->session_id_counter++ == 0) {
+		mail_user->session_id =
+			p_strdup(mail_user->pool, user->input.session_id);
+	} else {
+		mail_user->session_id =
+			p_strdup_printf(mail_user->pool, "%s:%u",
+					user->input.session_id,
+					user->session_id_counter);
+	}
 	mail_user->userdb_fields = user->input.userdb_fields == NULL ? NULL :
 		p_strarray_dup(mail_user->pool, user->input.userdb_fields);
 	mail_user->autoexpunge_enabled =
@@ -682,11 +691,18 @@ mail_storage_service_init_post(struct mail_storage_service_ctx *ctx,
 		/* we don't want to write core files to any users' home
 		   directories since they could contain information about other
 		   users' mails as well. so do no chdiring to home. */
-	} else if (*home != '\0' &&
-		   (user->flags & MAIL_STORAGE_SERVICE_FLAG_NO_CHDIR) == 0) {
+	} else if ((user->flags & MAIL_STORAGE_SERVICE_FLAG_NO_CHDIR) == 0) {
 		/* If possible chdir to home directory, so that core file
-		   could be written in case we crash. */
-		if (chdir(home) < 0) {
+		   could be written in case we crash.
+
+		   fallback to chdir()ing to root directory. this is needed
+		   because the current directory may not be accessible after
+		   dropping privileges, and for example unlink_directory()
+		   requires ability to open the current directory. */
+		if (home[0] == '\0') {
+			if (chdir("/") < 0)
+				i_error("chdir(/) failed: %m");
+		} else if (chdir(home) < 0) {
 			if (errno == EACCES) {
 				i_error("%s", eacces_error_get("chdir",
 						t_strconcat(home, "/", NULL)));
@@ -694,6 +710,9 @@ mail_storage_service_init_post(struct mail_storage_service_ctx *ctx,
 				i_error("chdir(%s) failed: %m", home);
 			else if (mail_set->mail_debug)
 				i_debug("Home dir not found: %s", home);
+
+			if (chdir("/") < 0)
+				i_error("chdir(/) failed: %m");
 		}
 	}
 
@@ -1102,7 +1121,7 @@ mail_storage_service_generate_session_id(pool_t pool, const char *prefix)
 	string_t *str = str_new(pool, MAX_BASE64_ENCODED_SIZE(prefix_len + 1 + sizeof(guid)));
 
 	if (prefix != NULL)
-		str_printfa(str, "%s-", prefix);
+		str_printfa(str, "%s:", prefix);
 
 	guid_128_generate(guid);
 	base64_encode(guid, sizeof(guid), str);
@@ -1145,15 +1164,13 @@ mail_storage_service_lookup_real(struct mail_storage_service_ctx *ctx,
 
 	if (mail_storage_service_read_settings(ctx, input, user_pool,
 					       &user_info, &set_parser,
-					       &error) < 0) {
+					       error_r) < 0) {
 		if (ctx->config_permission_denied) {
 			/* just restart and maybe next time we will open the
 			   config socket before dropping privileges */
-			i_fatal("%s", error);
+			i_fatal("%s", *error_r);
 		}
-		i_error("%s", error);
 		pool_unref(&user_pool);
-		*error_r = MAIL_ERRSTR_CRITICAL_MSG;
 		return -1;
 	}
 
@@ -1176,10 +1193,8 @@ mail_storage_service_lookup_real(struct mail_storage_service_ctx *ctx,
 	if (ctx->conn == NULL)
 		mail_storage_service_first_init(ctx, user_info, user_set);
 	/* load global plugins */
-	if (mail_storage_service_load_modules(ctx, user_info, user_set, &error) < 0) {
-		i_error("%s", error);
+	if (mail_storage_service_load_modules(ctx, user_info, user_set, error_r) < 0) {
 		pool_unref(&user_pool);
-		*error_r = MAIL_ERRSTR_CRITICAL_MSG;
 		return -1;
 	}
 
@@ -1192,8 +1207,7 @@ mail_storage_service_lookup_real(struct mail_storage_service_ctx *ctx,
 	}
 	if ((flags & MAIL_STORAGE_SERVICE_FLAG_USERDB_LOOKUP) != 0) {
 		ret = service_auth_userdb_lookup(ctx, input, temp_pool,
-						 &username, &userdb_fields,
-						 error_r);
+			&username, &userdb_fields, error_r);
 		if (ret <= 0) {
 			pool_unref(&temp_pool);
 			pool_unref(&user_pool);
@@ -1242,14 +1256,14 @@ mail_storage_service_lookup_real(struct mail_storage_service_ctx *ctx,
 		auth_user_fields_parse(userdb_fields, temp_pool, &reply);
 		array_sort(&reply.extra_fields, extra_field_key_cmp_p);
 		if (user_reply_handle(ctx, user, &reply, &error) < 0) {
-			i_error("Invalid settings in userdb: %s", error);
-			*error_r = ERRSTR_INVALID_USER_SETTINGS;
+			*error_r = t_strdup_printf(
+				"Invalid settings in userdb: %s", error);
 			ret = -2;
 		}
 	}
 	if (ret > 0 && !settings_parser_check(user->set_parser, user_pool, &error)) {
-		i_error("Invalid settings (probably caused by userdb): %s", error);
-		*error_r = ERRSTR_INVALID_USER_SETTINGS;
+		*error_r = t_strdup_printf(
+			"Invalid settings (probably caused by userdb): %s", error);
 		ret = -2;
 	}
 	pool_unref(&temp_pool);
@@ -1258,9 +1272,7 @@ mail_storage_service_lookup_real(struct mail_storage_service_ctx *ctx,
 	if (ret > 0) {
 		if (mail_storage_service_load_modules(ctx, user_info,
 						      user->user_set,
-						      &error) < 0) {
-			i_error("%s", error);
-			*error_r = MAIL_ERRSTR_CRITICAL_MSG;
+						      error_r) < 0) {
 			ret = -2;
 		}
 	}
@@ -1322,7 +1334,8 @@ void mail_storage_service_save_userdb_fields(struct mail_storage_service_ctx *ct
 static int
 mail_storage_service_next_real(struct mail_storage_service_ctx *ctx,
 			       struct mail_storage_service_user *user,
-			       struct mail_user **mail_user_r)
+			       struct mail_user **mail_user_r,
+			       const char **error_r)
 {
 	struct mail_storage_service_privileges priv;
 	const char *error;
@@ -1333,13 +1346,12 @@ mail_storage_service_next_real(struct mail_storage_service_ctx *ctx,
 		(user->flags & MAIL_STORAGE_SERVICE_FLAG_TEMP_PRIV_DROP) != 0;
 	bool use_chroot;
 
-	if (service_parse_privileges(ctx, user, &priv, &error) < 0) {
-		i_error("%s", error);
+	if (service_parse_privileges(ctx, user, &priv, error_r) < 0)
 		return -2;
-	}
 
 	if (*priv.home != '/' && *priv.home != '\0') {
-		i_error("Relative home directory paths not supported: %s",
+		*error_r = t_strdup_printf(
+			"Relative home directory paths not supported: %s",
 			priv.home);
 		return -2;
 	}
@@ -1387,7 +1399,8 @@ mail_storage_service_next_real(struct mail_storage_service_ctx *ctx,
 		if (service_drop_privileges(user, &priv,
 					    disallow_root, temp_priv_drop,
 					    FALSE, &error) < 0) {
-			i_error("Couldn't drop privileges: %s", error);
+			*error_r = t_strdup_printf(
+				"Couldn't drop privileges: %s", error);
 			return -1;
 		}
 		if (!temp_priv_drop ||
@@ -1400,16 +1413,15 @@ mail_storage_service_next_real(struct mail_storage_service_ctx *ctx,
 	module_dir_init(mail_storage_service_modules);
 
 	if (mail_storage_service_init_post(ctx, user, &priv,
-					   mail_user_r, &error) < 0) {
-		i_error("User initialization failed: %s", error);
+					   mail_user_r, error_r) < 0)
 		return -2;
-	}
 	return 0;
 }
 
 int mail_storage_service_next(struct mail_storage_service_ctx *ctx,
 			      struct mail_storage_service_user *user,
-			      struct mail_user **mail_user_r)
+			      struct mail_user **mail_user_r,
+			      const char **error_r)
 {
 	char *old_log_prefix = i_strdup(i_get_failure_prefix());
 	int ret;
@@ -1417,7 +1429,7 @@ int mail_storage_service_next(struct mail_storage_service_ctx *ctx,
 	mail_storage_service_set_log_prefix(ctx, user->user_set, user,
 					    &user->input, NULL);
 	i_set_failure_prefix("%s", old_log_prefix);
-	ret = mail_storage_service_next_real(ctx, user, mail_user_r);
+	ret = mail_storage_service_next_real(ctx, user, mail_user_r, error_r);
 	if ((user->flags & MAIL_STORAGE_SERVICE_FLAG_NO_LOG_INIT) != 0)
 		i_set_failure_prefix("%s", old_log_prefix);
 	i_free(old_log_prefix);
@@ -1450,11 +1462,9 @@ int mail_storage_service_lookup_next(struct mail_storage_service_ctx *ctx,
 	if (ret <= 0)
 		return ret;
 
-	ret = mail_storage_service_next(ctx, user, mail_user_r);
+	ret = mail_storage_service_next(ctx, user, mail_user_r, error_r);
 	if (ret < 0) {
 		mail_storage_service_user_free(&user);
-		*error_r = ret == -2 ? ERRSTR_INVALID_USER_SETTINGS :
-			MAIL_ERRSTR_CRITICAL_MSG;
 		return ret;
 	}
 	*user_r = user;
@@ -1519,7 +1529,8 @@ mail_storage_service_all_iter_deinit(struct mail_storage_service_ctx *ctx)
 	return ret;
 }
 
-void mail_storage_service_all_init(struct mail_storage_service_ctx *ctx)
+void mail_storage_service_all_init_mask(struct mail_storage_service_ctx *ctx,
+					const char *user_mask_hint)
 {
 	enum auth_master_flags flags = 0;
 
@@ -1533,7 +1544,8 @@ void mail_storage_service_all_init(struct mail_storage_service_ctx *ctx)
 		flags |= AUTH_MASTER_FLAG_DEBUG;
 	ctx->iter_conn = auth_master_init(auth_master_get_socket_path(ctx->conn),
 					  flags);
-	ctx->auth_list = auth_master_user_list_init(ctx->iter_conn, "", NULL);
+	ctx->auth_list = auth_master_user_list_init(ctx->iter_conn,
+						    user_mask_hint, NULL);
 }
 
 int mail_storage_service_all_next(struct mail_storage_service_ctx *ctx,

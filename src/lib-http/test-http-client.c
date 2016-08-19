@@ -8,6 +8,7 @@
 #include "http-url.h"
 #include "http-client.h"
 #include "dns-lookup.h"
+#include "iostream-ssl.h"
 
 struct http_test_request {
 	struct io *io;
@@ -22,7 +23,7 @@ static void payload_input(struct http_test_request *req)
 	int ret;
 
 	/* read payload */
-	while ((ret=i_stream_read_data(req->payload, &data, &size, 0)) > 0) {
+	while ((ret=i_stream_read_more(req->payload, &data, &size)) > 0) {
 		i_info("DEBUG: got data (size=%d)", (int)size); 
 		if (req->write_output)
 			write_full(1, data, size);
@@ -182,6 +183,7 @@ static void run_tests(struct http_client *http_client)
 	http_client_request_set_ssl(http_req, TRUE);
 	http_client_request_submit(http_req);
 	http_client_request_abort(&http_req);
+	i_free(test_req);
 
 	test_req = i_new(struct http_test_request, 1);
 	http_req = http_client_request(http_client,
@@ -294,10 +296,10 @@ test_http_request_init(struct http_client *http_client,
 	test_req = i_new(struct http_test_request, 1);
 	test_req->write_output = TRUE;
 	http_req = http_client_request(http_client,
-		method, url->host_name,
+		method, url->host.name,
 		t_strconcat("/", url->path, url->enc_query, NULL),
 		got_request_response, test_req);
-	if (url->have_port)
+	if (url->port != 0)
 		http_client_request_set_port(http_req, url->port);
 	if (url->have_ssl)
 		http_client_request_set_ssl(http_req, TRUE);
@@ -335,6 +337,7 @@ int main(int argc, char *argv[])
 	struct dns_lookup_settings dns_set;
 	struct http_client_settings http_set;
 	struct http_client *http_client;
+	struct ssl_iostream_settings ssl_set;
 	const char *error;
 	struct ioloop *ioloop;
 
@@ -356,11 +359,14 @@ int main(int argc, char *argv[])
 	if (dns_client_connect(dns_client, &error) < 0)
 		i_fatal("Couldn't initialize DNS client: %s", error);
 
+	memset(&ssl_set, 0, sizeof(ssl_set));
+	ssl_set.allow_invalid_cert = TRUE;
+	ssl_set.ca_dir = "/etc/ssl/certs"; /* debian */
+	ssl_set.ca_file = "/etc/pki/tls/cert.pem"; /* redhat */
+
 	memset(&http_set, 0, sizeof(http_set));
+	http_set.ssl = &ssl_set;
 	http_set.dns_client = dns_client;
-	http_set.ssl_allow_invalid_cert = TRUE;
-	http_set.ssl_ca_dir = "/etc/ssl/certs"; /* debian */
-	http_set.ssl_ca_file = "/etc/pki/tls/cert.pem"; /* redhat */
 	http_set.max_idle_time_msecs = 5*1000;
 	http_set.max_parallel_connections = 4;
 	http_set.max_pipelined_requests = 4;

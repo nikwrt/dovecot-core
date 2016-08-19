@@ -69,10 +69,6 @@ client_get_auth_flags(struct client *client)
 		auth_flags |= AUTH_REQUEST_FLAG_VALID_CLIENT_CERT;
 	if (client->secured)
 		auth_flags |= AUTH_REQUEST_FLAG_SECURED;
-	if (client->trusted) {
-		/* e.g. webmail */
-		auth_flags |= AUTH_REQUEST_FLAG_NO_PENALTY;
-	}
 	if (login_binary->sasl_support_final_reply)
 		auth_flags |= AUTH_REQUEST_FLAG_SUPPORT_FINAL_RESP;
 	return auth_flags;
@@ -135,7 +131,7 @@ static void master_send_request(struct anvil_request *anvil_request)
 	req.remote_ip = client->ip;
 	req.client_pid = getpid();
 	if (client->ssl_proxy != NULL &&
-	    ssl_proxy_get_compression(client->ssl_proxy))
+	    ssl_proxy_get_compression(client->ssl_proxy) != NULL)
 		req.flags |= MAIL_AUTH_REQUEST_FLAG_TLS_COMPRESSION;
 	memcpy(req.cookie, anvil_request->cookie, sizeof(req.cookie));
 

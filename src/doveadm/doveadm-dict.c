@@ -16,6 +16,7 @@ cmd_dict_init_full(int *argc, char **argv[], int own_arg_count, int key_arg_idx,
 		   struct dict **dict_r)
 {
 	const char *getopt_args = iter_flags == NULL ? "u:" : "1Ru:V";
+	struct dict_settings dict_set;
 	struct dict *dict;
 	const char *dict_uri, *error, *username = "";
 	int c;
@@ -70,8 +71,10 @@ cmd_dict_init_full(int *argc, char **argv[], int own_arg_count, int key_arg_idx,
 	}
 
 	dict_drivers_register_builtin();
-	if (dict_init(dict_uri, DICT_DATA_TYPE_STRING, username,
-		      doveadm_settings->base_dir, &dict, &error) < 0) {
+	memset(&dict_set, 0, sizeof(dict_set));
+	dict_set.username = username;
+	dict_set.base_dir = doveadm_settings->base_dir;
+	if (dict_init(dict_uri, &dict_set, &dict, &error) < 0) {
 		i_error("dict_init(%s) failed: %s", dict_uri, error);
 		doveadm_exit_code = EX_TEMPFAIL;
 		return -1;
@@ -92,7 +95,7 @@ cmd_dict_init(int *argc, char **argv[],
 static void cmd_dict_get(int argc, char *argv[])
 {
 	struct dict *dict;
-	const char *value;
+	const char *value, *error;
 	int ret;
 
 	if (cmd_dict_init(&argc, &argv, 1, 0, cmd_dict_get, &dict) < 0)
@@ -101,9 +104,9 @@ static void cmd_dict_get(int argc, char *argv[])
 	doveadm_print_init(DOVEADM_PRINT_TYPE_TABLE);
 	doveadm_print_header("value", "", DOVEADM_PRINT_HEADER_FLAG_HIDE_TITLE);
 
-	ret = dict_lookup(dict, pool_datastack_create(), argv[0], &value);
+	ret = dict_lookup(dict, pool_datastack_create(), argv[0], &value, &error);
 	if (ret < 0) {
-		i_error("dict_lookup(%s) failed", argv[0]);
+		i_error("dict_lookup(%s) failed: %s", argv[0], error);
 		doveadm_exit_code = EX_TEMPFAIL;
 	} else if (ret == 0) {
 		i_error("%s doesn't exist", argv[0]);
@@ -118,14 +121,15 @@ static void cmd_dict_set(int argc, char *argv[])
 {
 	struct dict *dict;
 	struct dict_transaction_context *trans;
+	const char *error;
 
 	if (cmd_dict_init(&argc, &argv, 2, 0, cmd_dict_set, &dict) < 0)
 		return;
 
 	trans = dict_transaction_begin(dict);
 	dict_set(trans, argv[0], argv[1]);
-	if (dict_transaction_commit(&trans) <= 0) {
-		i_error("dict_transaction_commit() failed");
+	if (dict_transaction_commit(&trans, &error) <= 0) {
+		i_error("dict_transaction_commit() failed: %s", error);
 		doveadm_exit_code = EX_TEMPFAIL;
 	}
 	dict_deinit(&dict);
@@ -135,14 +139,15 @@ static void cmd_dict_unset(int argc, char *argv[])
 {
 	struct dict *dict;
 	struct dict_transaction_context *trans;
+	const char *error;
 
 	if (cmd_dict_init(&argc, &argv, 1, 0, cmd_dict_unset, &dict) < 0)
 		return;
 
 	trans = dict_transaction_begin(dict);
 	dict_unset(trans, argv[0]);
-	if (dict_transaction_commit(&trans) <= 0) {
-		i_error("dict_transaction_commit() failed");
+	if (dict_transaction_commit(&trans, &error) <= 0) {
+		i_error("dict_transaction_commit() failed: %s", error);
 		doveadm_exit_code = EX_TEMPFAIL;
 	}
 	dict_deinit(&dict);
@@ -152,6 +157,7 @@ static void cmd_dict_inc(int argc, char *argv[])
 {
 	struct dict *dict;
 	struct dict_transaction_context *trans;
+	const char *error;
 	long long diff;
 	int ret;
 
@@ -167,9 +173,9 @@ static void cmd_dict_inc(int argc, char *argv[])
 
 	trans = dict_transaction_begin(dict);
 	dict_atomic_inc(trans, argv[0], diff);
-	ret = dict_transaction_commit(&trans);
+	ret = dict_transaction_commit(&trans, &error);
 	if (ret < 0) {
-		i_error("dict_transaction_commit() failed");
+		i_error("dict_transaction_commit() failed: %s", error);
 		doveadm_exit_code = EX_TEMPFAIL;
 	} else if (ret == 0) {
 		i_error("%s doesn't exist", argv[0]);
@@ -183,7 +189,7 @@ static void cmd_dict_iter(int argc, char *argv[])
 	struct dict *dict;
 	struct dict_iterate_context *iter;
 	enum dict_iterate_flags iter_flags = 0;
-	const char *key, *value;
+	const char *key, *value, *error;
 
 	if (cmd_dict_init_full(&argc, &argv, 1, 0, cmd_dict_iter, &iter_flags, &dict) < 0)
 		return;
@@ -199,8 +205,8 @@ static void cmd_dict_iter(int argc, char *argv[])
 		if ((iter_flags & DICT_ITERATE_FLAG_NO_VALUE) == 0)
 			doveadm_print(value);
 	}
-	if (dict_iterate_deinit(&iter) < 0) {
-		i_error("dict_iterate_deinit(%s) failed", argv[0]);
+	if (dict_iterate_deinit(&iter, &error) < 0) {
+		i_error("dict_iterate_deinit(%s) failed: %s", argv[0], error);
 		doveadm_exit_code = EX_TEMPFAIL;
 	}
 	dict_deinit(&dict);

@@ -69,10 +69,12 @@ struct dsync_ibc_vfuncs {
 			     struct dsync_mail **mail_r);
 
 	void (*send_finish)(struct dsync_ibc *ibc, const char *error,
-			    enum mail_error mail_error);
+			    enum mail_error mail_error,
+			    bool require_full_resync);
 	enum dsync_ibc_recv_ret
 		(*recv_finish)(struct dsync_ibc *ibc, const char **error_r,
-			       enum mail_error *mail_error_r);
+			       enum mail_error *mail_error_r,
+			       bool *require_full_resync_r);
 
 	void (*close_mail_streams)(struct dsync_ibc *ibc);
 	bool (*is_send_queue_full)(struct dsync_ibc *ibc);
@@ -85,8 +87,8 @@ struct dsync_ibc {
 	io_callback_t *io_callback;
 	void *io_context;
 
-	unsigned int failed:1;
-	unsigned int timeout:1;
+	bool failed:1;
+	bool timeout:1;
 };
 
 #endif

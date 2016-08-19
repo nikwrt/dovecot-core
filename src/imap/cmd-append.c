@@ -41,10 +41,10 @@ struct cmd_append_context {
 	struct mail_save_context *save_ctx;
 	unsigned int count;
 
-	unsigned int message_input:1;
-	unsigned int binary_input:1;
-	unsigned int catenate:1;
-	unsigned int failed:1;
+	bool message_input:1;
+	bool binary_input:1;
+	bool catenate:1;
+	bool failed:1;
 };
 
 static void cmd_append_finish(struct cmd_append_context *ctx);
@@ -213,7 +213,6 @@ cmd_append_catenate_mpurl(struct client_command_context *cmd,
 	}
 
 	if (mpresult.input->stream_errno != 0) {
-		errno = mpresult.input->stream_errno;
 		mail_storage_set_critical(ctx->box->storage,
 			"read(%s) failed: %s (for CATENATE URL %s)",
 			i_stream_get_name(mpresult.input),
@@ -393,7 +392,8 @@ static bool cmd_append_continue_catenate(struct client_command_context *cmd)
 	struct cmd_append_context *ctx = cmd->context;
 	const struct imap_arg *args;
 	const char *msg;
-	bool fatal, nonsync = FALSE;
+	enum imap_parser_error parse_error;
+	bool nonsync = FALSE;
 	int ret;
 
 	if (cmd->cancel) {
@@ -413,11 +413,20 @@ static bool cmd_append_continue_catenate(struct client_command_context *cmd)
 					    IMAP_PARSE_FLAG_INSIDE_LIST, &args);
 	} while (ret > 0 && !catenate_args_can_stop(ctx, args));
 	if (ret == -1) {
-		msg = imap_parser_get_error(ctx->save_parser, &fatal);
-		if (fatal)
-			client_disconnect_with_error(client, msg);
-		else if (!ctx->failed)
-			client_send_command_error(cmd, msg);
+		msg = imap_parser_get_error(ctx->save_parser, &parse_error);
+		switch (parse_error) {
+		case IMAP_PARSE_ERROR_NONE:
+			i_unreached();
+		case IMAP_PARSE_ERROR_LITERAL_TOO_BIG:
+			client_send_line(client, t_strconcat("* BYE ",
+				(client->set->imap_literal_minus ? "[TOOBIG] " : ""),
+				msg, NULL));
+			client_disconnect(client, msg);
+			break;
+		default:
+			if (!ctx->failed)
+				client_send_command_error(cmd, msg);
+		}
 		client->input_skip_line = TRUE;
 		cmd_append_finish(ctx);
 		return TRUE;
@@ -715,8 +724,9 @@ static bool cmd_append_parse_new_msg(struct client_command_context *cmd)
 	struct cmd_append_context *ctx = cmd->context;
 	const struct imap_arg *args;
 	const char *msg;
+	enum imap_parser_error parse_error;
 	unsigned int arg_min_count;
-	bool fatal, nonsync, last_literal;
+	bool nonsync, last_literal;
 	int ret;
 
 	/* this function gets called 1) after parsing APPEND <mailbox> and
@@ -749,11 +759,19 @@ static bool cmd_append_parse_new_msg(struct client_command_context *cmd)
 		 !cmd_append_args_can_stop(ctx, args, &last_literal));
 	if (ret == -1) {
 		if (!ctx->failed) {
-			msg = imap_parser_get_error(ctx->save_parser, &fatal);
-			if (fatal)
-				client_disconnect_with_error(client, msg);
-			else
+			msg = imap_parser_get_error(ctx->save_parser, &parse_error);
+			switch (parse_error) {
+			case IMAP_PARSE_ERROR_NONE:
+				i_unreached();
+			case IMAP_PARSE_ERROR_LITERAL_TOO_BIG:
+				client_send_line(client, t_strconcat("* BYE ",
+					(client->set->imap_literal_minus ? "[TOOBIG] " : ""),
+					msg, NULL));
+				client_disconnect(client, msg);
+				break;
+			default:
 				client_send_command_error(cmd, msg);
+			}
 		}
 		cmd_append_finish(ctx);
 		return TRUE;
@@ -924,6 +942,8 @@ bool cmd_append(struct client_command_context *cmd)
 
 	ctx->save_parser = imap_parser_create(client->input, client->output,
 					      client->set->imap_max_line_length);
+	if (client->set->imap_literal_minus)
+		imap_parser_enable_literal_minus(ctx->save_parser);
 
 	cmd->func = cmd_append_parse_new_msg;
 	cmd->context = ctx;

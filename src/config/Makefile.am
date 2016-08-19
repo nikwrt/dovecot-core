@@ -1,3 +1,4 @@
+pkgsysconfdir = $(sysconfdir)/dovecot
 pkglibexecdir = $(libexecdir)/dovecot
 exampledir = $(docdir)/example-config
 
@@ -13,16 +14,22 @@ AM_CPPFLAGS = \
 	-DPKG_LIBEXECDIR=\""$(pkglibexecdir)"\" \
 	-DEXAMPLE_CONFIG_DIR=\""$(exampledir)"\" \
 	-DMODULEDIR=\""$(moduledir)"\" \
-	-DSSLDIR=\""$(ssldir)\""
+	-DSSLDIR=\""$(ssldir)\"" \
+	-DSYSCONFDIR=\""$(pkgsysconfdir)"\" \
+	$(BINARY_CFLAGS)
 
 config_LDADD = \
 	$(LIBDOVECOT) \
-	$(RAND_LIBS)
+	$(RAND_LIBS) \
+	$(BINARY_LDFLAGS)
+
 config_DEPENDENCIES = $(LIBDOVECOT_DEPS)
 
 doveconf_LDADD = \
 	$(LIBDOVECOT) \
-	$(RAND_LIBS)
+	$(RAND_LIBS) \
+	$(BINARY_LDFLAGS)
+
 doveconf_DEPENDENCIES = $(LIBDOVECOT_DEPS)
 
 common = \

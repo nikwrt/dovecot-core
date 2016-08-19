@@ -5,7 +5,7 @@
 #include "test-common.h"
 
 #include <stdio.h>
-
+#include <unistd.h> /* _exit() */
 #include <setjmp.h> /* for fatal tests */
 
 /* To test the firing of i_assert, we need non-local jumps, i.e. setjmp */
@@ -38,8 +38,10 @@ static ssize_t test_read(struct istream_private *stream)
 
 	i_assert(stream->skip <= stream->pos);
 
-	if (stream->pos - stream->skip >= tstream->istream.max_buffer_size)
+	if (stream->pos - stream->skip >= tstream->istream.max_buffer_size) {
+		i_assert(stream->skip != stream->pos);
 		return -2;
+	}
 
 	if (tstream->max_pos < stream->pos) {
 		/* we seeked past the end of file. */
@@ -70,8 +72,10 @@ static ssize_t test_read(struct istream_private *stream)
 			stream->buffer = stream->w_buffer;
 			stream->buffer_size = cur_max;
 		}
-		memcpy(stream->w_buffer + new_skip_diff, tstream->orig_buffer,
-		       cur_max - new_skip_diff);
+		ssize_t size = cur_max - new_skip_diff;
+		if (size > 0)
+			memcpy(stream->w_buffer + new_skip_diff,
+				tstream->orig_buffer, (size_t)size);
 
 		ret = cur_max - stream->pos;
 		stream->pos = cur_max;
@@ -177,6 +181,15 @@ void test_assert_failed_idx(const char *code, const char *file, unsigned int lin
 	test_success = FALSE;
 }
 
+void test_assert_failed_strcmp(const char *code, const char *file, unsigned int line,
+				const char * src, const char * dst)
+{
+	printf("%s: Assert(#%u) failed: %s\n", file, line, code);
+	printf("        \"%s\" != \"%s\"\n", src, dst);
+	fflush(stdout);
+	test_success = FALSE;
+}
+
 static void
 test_dump_rand_state(void)
 {
@@ -274,6 +287,7 @@ void
 test_expect_no_more_errors(void)
 {
 	test_assert(expected_errors == 0 && expected_error_str == NULL);
+	i_free_and_null(expected_error_str);
 	expected_errors = 0;
 }
 
@@ -281,25 +295,24 @@ static void ATTR_FORMAT(2, 0)
 test_error_handler(const struct failure_context *ctx,
 		   const char *format, va_list args)
 {
-	test_dump_rand_state();
-	default_error_handler(ctx, format, args);
-#ifdef DEBUG
-	if (ctx->type == LOG_TYPE_WARNING &&
-	    strstr(format, "Growing") != NULL) {
-		/* ignore "Growing memory pool" and "Growing data stack"
-		   warnings */
-		return;
-	}
-#endif
+	bool suppress = FALSE;
+
 	if (expected_errors > 0) {
 		if (expected_error_str != NULL) {
-			test_assert(strstr(format, expected_error_str) != NULL);
-			i_free(expected_error_str);
+			/* test_assert() will reset test_success if need be. */
+			suppress = strstr(format, expected_error_str) != NULL;
+			test_assert(suppress == TRUE);
+			i_free_and_null(expected_error_str);
 		}
 		expected_errors--;
-		return;
+	} else {
+		test_success = FALSE;
 	}
-	test_success = FALSE;
+
+	if (!suppress) {
+		test_dump_rand_state();
+		default_error_handler(ctx, format, args);
+	}
 }
 
 static void ATTR_FORMAT(2, 0) ATTR_NORETURN
@@ -341,6 +354,16 @@ static void test_run_funcs(void (*test_functions[])(void))
 	for (i = 0; test_functions[i] != NULL; i++) {
 		T_BEGIN {
 			test_functions[i]();
+		} T_END;
+	}
+}
+static void test_run_named_funcs(struct named_test tests[], const char *match)
+{
+	unsigned int i;
+
+	for (i = 0; tests[i].func != NULL; i++) {
+		if (strstr(tests[i].name, match) != NULL) T_BEGIN {
+			tests[i].func();
 		} T_END;
 	}
 }
@@ -386,11 +409,27 @@ static void test_run_fatals(enum fatal_test_state (*fatal_functions[])(int index
 		} T_END;
 	}
 }
+static void test_run_named_fatals(const struct named_fatal fatals[], const char *match)
+{
+	unsigned int i;
+
+	for (i = 0; fatals[i].func != NULL; i++) {
+		if (strstr(fatals[i].name, match) != NULL) T_BEGIN {
+			run_one_fatal(fatals[i].func);
+		} T_END;
+	}
+}
 
 int test_run(void (*test_functions[])(void))
 {
 	test_init();
 	test_run_funcs(test_functions);
+	return test_deinit();
+}
+int test_run_named(struct named_test tests[], const char *match)
+{
+	test_init();
+	test_run_named_funcs(tests, match);
 	return test_deinit();
 }
 int test_run_with_fatals(void (*test_functions[])(void),
@@ -401,4 +440,23 @@ int test_run_with_fatals(void (*test_functions[])(void),
 	i_set_fatal_handler(test_fatal_handler);
 	test_run_fatals(fatal_functions);
 	return test_deinit();
+}
+int test_run_named_with_fatals(const char *match, struct named_test tests[],
+			       struct named_fatal fatals[])
+{
+	test_init();
+	test_run_named_funcs(tests, match);
+	i_set_fatal_handler(test_fatal_handler);
+	test_run_named_fatals(fatals, match);
+	return test_deinit();
+}
+
+void ATTR_NORETURN
+test_exit(int status)
+{
+	i_free_and_null(expected_error_str);
+	i_free_and_null(test_prefix);
+	(void)t_pop(); /* as we were within a T_BEGIN { tests[i].func(); } T_END */
+	lib_deinit();
+	_exit(status);
 }

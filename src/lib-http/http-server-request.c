@@ -100,7 +100,7 @@ void http_server_request_destroy(struct http_server_request **_req)
 	if (req->state < HTTP_SERVER_REQUEST_STATE_FINISHED)
 		req->state = HTTP_SERVER_REQUEST_STATE_ABORTED;
 
-	if (server->ioloop)
+	if (server->ioloop != NULL)
 		io_loop_stop(server->ioloop);
 
 	if (req->delay_destroy) {
@@ -127,6 +127,9 @@ void http_server_request_abort(struct http_server_request **_req,
 {
 	struct http_server_request *req = *_req;
 	struct http_server_connection *conn = req->conn;
+
+	if (req->state >= HTTP_SERVER_REQUEST_STATE_FINISHED)
+		return;
 
 	http_server_request_debug(req, "Abort");
 
@@ -475,8 +478,6 @@ http_server_istream_destroy(struct iostream_private *stream)
 		/* get to same position in parent stream */
 		i_stream_seek(hsristream->istream.parent, v_offset);
 	}
-
-	i_stream_unref(&hsristream->istream.parent);
 }
 
 struct istream *

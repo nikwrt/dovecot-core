@@ -3,6 +3,7 @@
 #include "lib.h"
 #include "array.h"
 #include "str.h"
+#include "sort.h"
 #include "ostream.h"
 #include "env-util.h"
 #include "execv-const.h"
@@ -210,7 +211,8 @@ static void cmd_exec(int argc ATTR_UNUSED, char *argv[])
 	i_fatal("execv(%s) failed: %m", argv[0]);
 }
 
-static bool doveadm_try_run(const char *cmd_name, int argc, const char *argv[])
+static bool doveadm_try_run(const char *cmd_name, int argc,
+			    const char *const argv[])
 {
 	const struct doveadm_cmd *cmd;
 
@@ -254,6 +256,7 @@ static void doveadm_read_settings(void)
 	memset(&input, 0, sizeof(input));
 	input.roots = set_roots;
 	input.module = "doveadm";
+	input.service = "doveadm";
 	input.preserve_user = TRUE;
 	input.preserve_home = TRUE;
 	if (master_service_settings_read(master_service, &input,
@@ -267,6 +270,8 @@ static void doveadm_read_settings(void)
 	set = master_service_settings_get_others(master_service)[0];
 	doveadm_settings = settings_dup(&doveadm_setting_parser_info, set,
 					pool_datastack_create());
+
+	doveadm_settings->parsed_features = set->parsed_features; /* copy this value by hand */
 }
 
 static struct doveadm_cmd *doveadm_cmdline_commands[] = {
@@ -282,7 +287,8 @@ int main(int argc, char *argv[])
 {
 	enum master_service_flags service_flags =
 		MASTER_SERVICE_FLAG_STANDALONE |
-		MASTER_SERVICE_FLAG_KEEP_CONFIG_OPEN;
+		MASTER_SERVICE_FLAG_KEEP_CONFIG_OPEN |
+		MASTER_SERVICE_FLAG_NO_INIT_DATASTACK_FRAME;
 	struct doveadm_cmd_context cctx;
 	const char *cmd_name;
 	unsigned int i;
@@ -332,7 +338,7 @@ int main(int argc, char *argv[])
 	doveadm_cmds_init();
 	for (i = 0; i < N_ELEMENTS(doveadm_cmdline_commands); i++)
 		doveadm_register_cmd(doveadm_cmdline_commands[i]);
-
+	doveadm_register_auth_commands();
 	doveadm_cmd_register_ver2(&doveadm_cmd_stats_top_ver2);
 
 	if (cmd_name != NULL && (quick_init ||
@@ -345,7 +351,7 @@ int main(int argc, char *argv[])
 		quick_init = TRUE;
 	} else {
 		quick_init = FALSE;
-		doveadm_print_ostream = o_stream_create_fd(STDOUT_FILENO, 0, FALSE);
+		doveadm_print_ostream = o_stream_create_fd(STDOUT_FILENO, 0);
 		o_stream_set_no_error_handling(doveadm_print_ostream, TRUE);
 		doveadm_dump_init();
 		doveadm_mail_init();

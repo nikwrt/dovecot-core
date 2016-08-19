@@ -48,9 +48,9 @@ struct fs_list_iterate_context {
 	/* current directory we're handling */
 	struct list_dir_context *dir;
 
-	unsigned int inbox_found:1;
-	unsigned int inbox_has_children:1;
-	unsigned int list_inbox_inbox:1;
+	bool inbox_found:1;
+	bool inbox_has_children:1;
+	bool list_inbox_inbox:1;
 };
 
 static int
@@ -350,6 +350,10 @@ fs_list_get_valid_patterns(struct fs_list_iterate_context *ctx,
 		   validation. */
 		if (strncmp(test_pattern, _list->ns->prefix, prefix_len) == 0)
 			test_pattern += prefix_len;
+		if (!uni_utf8_str_is_valid(test_pattern)) {
+			/* ignore invalid UTF8 patterns */
+			continue;
+		}
 		/* check pattern also when it's converted to use real
 		   separators. */
 		real_pattern =

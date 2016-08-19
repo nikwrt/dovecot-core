@@ -92,19 +92,15 @@ struct http_client *http_client_init(const struct http_client_settings *set)
 	pool = pool_alloconly_create("http client", 1024);
 	client = p_new(pool, struct http_client, 1);
 	client->pool = pool;
+
 	client->set.dns_client = set->dns_client;
 	client->set.dns_client_socket_path =
 		p_strdup_empty(pool, set->dns_client_socket_path);
 	client->set.user_agent = p_strdup_empty(pool, set->user_agent);
 	client->set.rawlog_dir = p_strdup_empty(pool, set->rawlog_dir);
-	client->set.ssl_ca_dir = p_strdup(pool, set->ssl_ca_dir);
-	client->set.ssl_ca_file = p_strdup(pool, set->ssl_ca_file);
-	client->set.ssl_ca = p_strdup(pool, set->ssl_ca);
-	client->set.ssl_crypto_device = p_strdup(pool, set->ssl_crypto_device);
-	client->set.ssl_allow_invalid_cert = set->ssl_allow_invalid_cert;
-	client->set.ssl_cert = p_strdup(pool, set->ssl_cert);
-	client->set.ssl_key = p_strdup(pool, set->ssl_key);
-	client->set.ssl_key_password = p_strdup(pool, set->ssl_key_password);
+
+	if (set->ssl != NULL)
+		client->set.ssl = ssl_iostream_settings_dup(client->pool, set->ssl);
 
 	if (set->proxy_socket_path != NULL && *set->proxy_socket_path != '\0') {
 		client->set.proxy_socket_path = p_strdup(pool, set->proxy_socket_path);
@@ -137,6 +133,7 @@ struct http_client *http_client_init(const struct http_client_settings *set)
 			HTTP_CLIENT_DEFAULT_BACKOFF_MAX_TIME_MSECS :
 			set->connect_backoff_max_time_msecs;
 	client->set.no_auto_redirect = set->no_auto_redirect;
+	client->set.no_auto_retry = set->no_auto_retry;
 	client->set.no_ssl_tunnel = set->no_ssl_tunnel;
 	client->set.max_redirects = set->max_redirects;
 	client->set.response_hdr_limits = set->response_hdr_limits;
@@ -149,6 +146,8 @@ struct http_client *http_client_init(const struct http_client_settings *set)
 	client->set.connect_timeout_msecs = set->connect_timeout_msecs;
 	client->set.soft_connect_timeout_msecs = set->soft_connect_timeout_msecs;
 	client->set.max_auto_retry_delay = set->max_auto_retry_delay;
+	client->set.socket_send_buffer_size = set->socket_send_buffer_size;
+	client->set.socket_recv_buffer_size = set->socket_recv_buffer_size;
 	client->set.debug = set->debug;
 
 	i_array_init(&client->delayed_failing_requests, 1);
@@ -165,29 +164,25 @@ struct http_client *http_client_init(const struct http_client_settings *set)
 void http_client_deinit(struct http_client **_client)
 {
 	struct http_client *client = *_client;
-	struct http_client_request *req, *const *req_idx;
+	struct http_client_request *req;
 	struct http_client_host *host;
 	struct http_client_peer *peer;
 
 	*_client = NULL;
 
-	/* drop delayed failing requests */
-	while (array_count(&client->delayed_failing_requests) > 0) {
-		req_idx = array_idx(&client->delayed_failing_requests, 0);
-		req = *req_idx;
-
-		i_assert(req->refcount == 1);
-		http_client_request_error_delayed(&req);
+	/* destroy requests without calling callbacks */
+	req = client->requests_list;
+	while (req != NULL) {
+		struct http_client_request *next_req = req->next;
+		http_client_request_destroy(&req);
+		req = next_req;
 	}
-	array_free(&client->delayed_failing_requests);
-
-	if (client->to_failing_requests != NULL)
-		timeout_remove(&client->to_failing_requests);
+	i_assert(client->requests_count == 0);
 
 	/* free peers */
 	while (client->peers_list != NULL) {
 		peer = client->peers_list;
-		http_client_peer_free(&peer);
+		http_client_peer_close(&peer);
 	}
 	hash_table_destroy(&client->peers);
 
@@ -197,6 +192,10 @@ void http_client_deinit(struct http_client **_client)
 		http_client_host_free(&host);
 	}
 	hash_table_destroy(&client->hosts);
+
+	array_free(&client->delayed_failing_requests);
+	if (client->to_failing_requests != NULL)
+		timeout_remove(&client->to_failing_requests);
 
 	connection_list_deinit(&client->conn_list);
 
@@ -278,25 +277,16 @@ unsigned int http_client_get_pending_request_count(struct http_client *client)
 
 int http_client_init_ssl_ctx(struct http_client *client, const char **error_r)
 {
-	struct ssl_iostream_settings ssl_set;
 	const char *error;
 
 	if (client->ssl_ctx != NULL)
 		return 0;
 
-	memset(&ssl_set, 0, sizeof(ssl_set));
-	ssl_set.ca_dir = client->set.ssl_ca_dir;
-	ssl_set.ca_file = client->set.ssl_ca_file;
-	ssl_set.ca = client->set.ssl_ca;
-	ssl_set.verify_remote_cert = TRUE;
-	ssl_set.crypto_device = client->set.ssl_crypto_device;
-	ssl_set.cert = client->set.ssl_cert;
-	ssl_set.key = client->set.ssl_key;
-	ssl_set.key_password = client->set.ssl_key_password;
-	ssl_set.verbose = client->set.debug;
-	ssl_set.verbose_invalid_cert = client->set.debug;
-
-	if (ssl_iostream_context_init_client(&ssl_set, &client->ssl_ctx, &error) < 0) {
+	if (client->set.ssl == NULL) {
+		*error_r = "Requested https connection, but no SSL settings given";
+		return -1;
+	}
+	if (ssl_iostream_context_init_client(client->set.ssl, &client->ssl_ctx, &error) < 0) {
 		*error_r = t_strdup_printf("Couldn't initialize SSL context: %s",
 					   error);
 		return -1;

@@ -31,7 +31,7 @@ struct auth_master_connection *mail_user_auth_master_conn;
 static void mail_user_deinit_base(struct mail_user *user)
 {
 	if (user->_attr_dict != NULL) {
-		(void)dict_wait(user->_attr_dict);
+		dict_wait(user->_attr_dict);
 		dict_deinit(&user->_attr_dict);
 	}
 	mail_namespaces_deinit(&user->namespaces);
@@ -288,6 +288,7 @@ void mail_user_add_namespace(struct mail_user *user,
 
 		tmp = &user->namespaces;
 		for (; *tmp != NULL; tmp = &(*tmp)->next) {
+			i_assert(*tmp != ns);
 			if (strlen(ns->prefix) < strlen((*tmp)->prefix))
 				break;
 		}
@@ -414,6 +415,31 @@ bool mail_user_is_plugin_loaded(struct mail_user *user, struct module *module)
 		ret = str_array_find(plugins, module_get_plugin_name(module));
 	} T_END;
 	return ret;
+}
+
+bool mail_user_plugin_getenv_bool(struct mail_user *user, const char *name)
+{
+	return mail_user_set_plugin_getenv_bool(user->set, name);
+}
+
+bool mail_user_set_plugin_getenv_bool(const struct mail_user_settings *set,
+				      const char *name)
+{
+	const char *env = mail_user_set_plugin_getenv(set, name);
+
+	if (env == NULL)
+		return FALSE;
+	switch (env[0]) {
+		case 'n':
+		case 'N':
+		case '0':
+		case 'f':
+		case 'F':
+		return FALSE;
+	}
+
+	//any other value including empty string will be treated as TRUE.
+	return TRUE;
 }
 
 const char *mail_user_plugin_getenv(struct mail_user *user, const char *name)

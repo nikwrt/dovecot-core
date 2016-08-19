@@ -206,7 +206,7 @@ void client_proxy_log_failure(struct client *client, const char *line)
 		str_printfa(str, " (master %s)", client->proxy_master_user);
 	str_append(str, ": ");
 	str_append(str, line);
-	i_info("%s", str_c(str));
+	client_log(client, str_c(str));
 }
 
 void client_proxy_failed(struct client *client, bool send_line)
@@ -486,7 +486,7 @@ int client_auth_read_line(struct client *client)
 	size_t i, size;
 	unsigned int len;
 
-	if (i_stream_read_data(client->input, &data, &size, 0) == -1) {
+	if (i_stream_read_more(client->input, &data, &size) == -1) {
 		client_destroy(client, "Disconnected");
 		return -1;
 	}
@@ -510,7 +510,7 @@ int client_auth_read_line(struct client *client)
 	if (len > 0 && str_c(client->auth_response)[len-1] == '\r')
 		str_truncate(client->auth_response, len-1);
 
-	return i < size;
+	return i < size ? 1 : 0;
 }
 
 void client_auth_parse_response(struct client *client)

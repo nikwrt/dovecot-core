@@ -61,7 +61,7 @@ m_str_reverse(const char *str, struct var_expand_context *ctx ATTR_UNUSED)
 	size_t len = strlen(str);
 	char *p, *rev;
 
-	rev = t_malloc(len + 1);
+	rev = t_malloc_no0(len + 1);
 	rev[len] = '\0';
 
 	for (p = rev + len - 1; *str != '\0'; str++)
@@ -129,7 +129,7 @@ m_str_ldap_dn(const char *str, struct var_expand_context *ctx ATTR_UNUSED)
 {
 	string_t *ret = t_str_new(256);
 
-	while (*str) {
+	while (*str != '\0') {
 		if (*str == '.')
 			str_append(ret, ",dc=");
 		else
@@ -232,6 +232,8 @@ var_expand_long(const struct var_expand_table *table,
 			data = "";
 		value = var_expand_func(func_table, key, data, context);
 	}
+	if (value == NULL)
+		return t_strdup_printf("UNSUPPORTED_VARIABLE_%s", key);
 	return value;
 }
 
@@ -325,8 +327,8 @@ void var_expand_with_funcs(string_t *dest, const char *str,
 				len = end - (str + 1);
 				var = var_expand_long(table, func_table,
 						      str+1, len, context);
-				if (var != NULL)
-					str = end;
+				i_assert(var != NULL);
+				str = end;
 			} else if (table != NULL) {
 				for (t = table; !TABLE_LAST(t); t++) {
 					if (t->key == *str) {
@@ -386,15 +388,8 @@ void var_expand(string_t *dest, const char *str,
 	var_expand_with_funcs(dest, str, table, NULL, NULL);
 }
 
-char var_get_key(const char *str)
-{
-	unsigned int idx, size;
-
-	var_get_key_range(str, &idx, &size);
-	return str[idx];
-}
-
-void var_get_key_range(const char *str, unsigned int *idx_r,
+static bool
+var_get_key_range_full(const char *str, unsigned int *idx_r,
 		       unsigned int *size_r)
 {
 	const struct var_expand_modifier *m;
@@ -423,6 +418,7 @@ void var_get_key_range(const char *str, unsigned int *idx_r,
 		/* short key */
 		*idx_r = i;
 		*size_r = str[i] == '\0' ? 0 : 1;
+		return FALSE;
 	} else {
 		/* long key */
 		*idx_r = ++i;
@@ -431,7 +427,23 @@ void var_get_key_range(const char *str, unsigned int *idx_r,
 				break;
 		}
 		*size_r = i - *idx_r;
+		return TRUE;
 	}
+}
+
+char var_get_key(const char *str)
+{
+	unsigned int idx, size;
+
+	if (var_get_key_range_full(str, &idx, &size))
+		return '{';
+	return str[idx];
+}
+
+void var_get_key_range(const char *str, unsigned int *idx_r,
+		       unsigned int *size_r)
+{
+	(void)var_get_key_range_full(str, idx_r, size_r);
 }
 
 static bool var_has_long_key(const char **str, const char *long_key)
@@ -461,7 +473,7 @@ bool var_has_key(const char *str, char key, const char *long_key)
 		if (*str == '%' && str[1] != '\0') {
 			str++;
 			c = var_get_key(str);
-			if (c == key)
+			if (c == key && key != '\0')
 				return TRUE;
 
 			if (c == '{' && long_key != NULL) {

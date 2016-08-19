@@ -62,7 +62,7 @@ void *ucs2be_str(pool_t pool, const char *str, size_t *size);
  * Compute client -> server authentication response.
  */
 static void rpa_user_response(struct rpa_auth_request *request,
-			      unsigned char digest[MD5_RESULTLEN])
+			      unsigned char digest[STATIC_ARRAY MD5_RESULTLEN])
 {
 	struct md5_context ctx;
 	unsigned char z[48];
@@ -86,7 +86,7 @@ static void rpa_user_response(struct rpa_auth_request *request,
  * Compute server -> client authentication response.
  */
 static void rpa_server_response(struct rpa_auth_request *request,
-				unsigned char digest[MD5_RESULTLEN])
+				unsigned char digest[STATIC_ARRAY MD5_RESULTLEN])
 {
 	struct md5_context ctx;
 	unsigned char tmp[MD5_RESULTLEN];
@@ -381,7 +381,7 @@ mech_rpa_build_token2(struct rpa_auth_request *request, size_t *size)
 	buffer_append_c(buf, realms_len & 0xff);
 	buffer_append(buf, str_c(realms), realms_len);
 
-	*size = buffer_get_used_size(buf);
+	*size = buf->used;
 	return buffer_free_without_data(&buf);
 }
 
@@ -414,7 +414,7 @@ mech_rpa_build_token4(struct rpa_auth_request *request, size_t *size)
 	/* Status, 0 - success */
 	buffer_append_c(buf, 0);
 
-	*size = buffer_get_used_size(buf);
+	*size = buf->used;
 	return buffer_free_without_data(&buf);
 }
 

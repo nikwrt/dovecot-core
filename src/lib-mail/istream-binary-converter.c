@@ -24,7 +24,7 @@ struct binary_converter_istream {
 
 	buffer_t *hdr_buf;
 	unsigned int cte_header_len;
-	unsigned int content_type_seen:1;
+	bool content_type_seen:1;
 };
 
 static void stream_add_data(struct binary_converter_istream *bstream,
@@ -180,7 +180,7 @@ static ssize_t i_stream_binary_converter_read(struct istream_private *stream)
 	struct message_block block;
 	size_t old_size, new_size;
 
-	if (stream->pos - stream->skip >= stream->max_buffer_size)
+	if (stream->pos - stream->skip >= i_stream_get_max_buffer_size(&stream->istream))
 		return -2;
 	old_size = stream->pos - stream->skip;
 
@@ -275,8 +275,7 @@ static void i_stream_binary_converter_close(struct iostream_private *stream,
 	struct message_part *parts;
 
 	if (bstream->parser != NULL) {
-		if (message_parser_deinit(&bstream->parser, &parts) < 0)
-			i_unreached(); /* we didn't use preparsed message_parts */
+		message_parser_deinit(&bstream->parser, &parts);
 	}
 	if (bstream->pool != NULL)
 		pool_unref(&bstream->pool);

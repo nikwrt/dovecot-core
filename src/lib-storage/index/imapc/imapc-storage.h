@@ -51,8 +51,8 @@ struct imapc_storage_client {
 
 	ARRAY(struct imapc_storage_event_callback) untagged_callbacks;
 
-	unsigned int auth_failed:1;
-	unsigned int destroying:1;
+	bool auth_failed:1;
+	bool destroying:1;
 };
 
 struct imapc_storage {
@@ -68,7 +68,7 @@ struct imapc_storage {
 
 	ARRAY(struct imapc_namespace) remote_namespaces;
 
-	unsigned int namespaces_requested:1;
+	bool namespaces_requested:1;
 };
 
 struct imapc_mail_cache {
@@ -108,9 +108,11 @@ struct imapc_mailbox {
 	enum mail_flags permanent_flags;
 	uint32_t highest_nonrecent_uid;
 
+	ARRAY(uint64_t) rseq_modseqs;
 	ARRAY_TYPE(uint32_t) delayed_expunged_uids;
 	uint32_t sync_uid_validity;
 	uint32_t sync_uid_next;
+	uint64_t sync_highestmodseq;
 	uint32_t sync_fetch_first_uid;
 	uint32_t sync_next_lseq;
 	uint32_t sync_next_rseq;
@@ -128,11 +130,11 @@ struct imapc_mailbox {
 	const char *guid_fetch_field_name;
 	struct imapc_search_context *search_ctx;
 
-	unsigned int selecting:1;
-	unsigned int syncing:1;
-	unsigned int initial_sync_done:1;
-	unsigned int selected:1;
-	unsigned int exists_received:1;
+	bool selecting:1;
+	bool syncing:1;
+	bool initial_sync_done:1;
+	bool selected:1;
+	bool exists_received:1;
 };
 
 struct imapc_simple_context {
@@ -165,6 +167,7 @@ void imapc_mailbox_run_nofetch(struct imapc_mailbox *mbox);
 void imapc_mail_cache_free(struct imapc_mail_cache *cache);
 int imapc_mailbox_select(struct imapc_mailbox *mbox);
 
+bool imapc_storage_has_modseqs(struct imapc_storage *storage);
 bool imap_resp_text_code_parse(const char *str, enum mail_error *error_r);
 void imapc_copy_error_from_reply(struct imapc_storage *storage,
 				 enum mail_error default_error,

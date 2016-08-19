@@ -24,7 +24,6 @@ enum dict_protocol_cmd {
 
 	DICT_PROTOCOL_CMD_SET = 'S', /* <id> <key> <value> */
 	DICT_PROTOCOL_CMD_UNSET = 'U', /* <id> <key> */
-	DICT_PROTOCOL_CMD_APPEND = 'P', /* <id> <key> <value> */
 	DICT_PROTOCOL_CMD_ATOMIC_INC = 'A' /* <id> <key> <diff> */
 };
 
@@ -32,10 +31,8 @@ enum dict_protocol_reply {
 	DICT_PROTOCOL_REPLY_OK = 'O', /* <value> */
 	DICT_PROTOCOL_REPLY_NOTFOUND = 'N',
 	DICT_PROTOCOL_REPLY_FAIL = 'F',
+	DICT_PROTOCOL_REPLY_WRITE_UNCERTAIN = 'W',
 	DICT_PROTOCOL_REPLY_ASYNC_COMMIT = 'A'
 };
-
-const char *dict_client_escape(const char *src);
-const char *dict_client_unescape(const char *src);
 
 #endif

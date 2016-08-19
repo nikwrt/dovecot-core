@@ -11,12 +11,13 @@ struct ssl_iostream_settings {
 	const char *cert;
 	const char *key;
 	const char *key_password;
+	const char *dh;
 	const char *cert_username_field;
 	const char *crypto_device; /* context-only */
 
 	bool verbose, verbose_invalid_cert; /* stream-only */
 	bool verify_remote_cert; /* neither/both */
-	bool require_valid_cert; /* stream-only */
+	bool allow_invalid_cert; /* stream-only */
 	bool prefer_server_ciphers;
 	bool compression;
 	bool tickets;
@@ -65,11 +66,6 @@ const char *ssl_iostream_get_server_name(struct ssl_iostream *ssl_io);
 const char *ssl_iostream_get_security_string(struct ssl_iostream *ssl_io);
 const char *ssl_iostream_get_last_error(struct ssl_iostream *ssl_io);
 
-int ssl_iostream_generate_params(buffer_t *output, unsigned int dh_length,
-				 const char **error_r);
-int ssl_iostream_context_import_params(struct ssl_iostream_context *ctx,
-				       const buffer_t *input);
-
 int ssl_iostream_context_init_client(const struct ssl_iostream_settings *set,
 				     struct ssl_iostream_context **ctx_r,
 				     const char **error_r);
@@ -77,5 +73,7 @@ int ssl_iostream_context_init_server(const struct ssl_iostream_settings *set,
 				     struct ssl_iostream_context **ctx_r,
 				     const char **error_r);
 void ssl_iostream_context_deinit(struct ssl_iostream_context **ctx);
+struct ssl_iostream_settings *ssl_iostream_settings_dup(pool_t pool,
+			const struct ssl_iostream_settings *old_set);
 
 #endif

@@ -34,6 +34,8 @@ struct http_server *http_server_init(const struct http_server_settings *set)
 	server->set.max_pipelined_requests =
 		(set->max_pipelined_requests > 0 ? set->max_pipelined_requests : 1);
 	server->set.request_limits = set->request_limits;
+	server->set.socket_send_buffer_size = set->socket_send_buffer_size;
+	server->set.socket_recv_buffer_size = set->socket_recv_buffer_size;
 	server->set.debug = set->debug;
 
 	server->conn_list = http_server_connection_list_init();
@@ -67,5 +69,21 @@ void http_server_switch_ioloop(struct http_server *server)
 			(struct http_server_connection *)_conn;
 
 		http_server_connection_switch_ioloop(conn);
+	}
+}
+
+void http_server_shut_down(struct http_server *server)
+{
+	struct connection *_conn, *_next;
+
+	server->shutting_down = TRUE;
+
+	for (_conn = server->conn_list->connections;
+		_conn != NULL; _conn = _next) {
+		struct http_server_connection *conn =
+			(struct http_server_connection *)_conn;
+
+		_next = _conn->next;
+		(void)http_server_connection_shut_down(conn);
 	}
 }

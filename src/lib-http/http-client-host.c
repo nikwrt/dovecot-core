@@ -176,7 +176,7 @@ struct http_client_host *http_client_host_get
 		}
 
 	} else {
-		const char *hostname = host_url->host_name;
+		const char *hostname = host_url->host.name;
 
 		host = hash_table_lookup(client->hosts, hostname);
 		if (host == NULL) {
@@ -185,10 +185,10 @@ struct http_client_host *http_client_host_get
 			hostname = host->name;
 			hash_table_insert(client->hosts, hostname, host);
 
-			if (host_url->have_host_ip) {
+			if (host_url->host.ip.family != 0) {
 				host->ips_count = 1;
 				host->ips = i_new(struct ip_addr, host->ips_count);
-				host->ips[0] = host_url->host_ip;
+				host->ips[0] = host_url->host.ip;
 			}
 
 			http_client_host_debug(host, "Host created");
@@ -210,7 +210,7 @@ void http_client_host_submit_request(struct http_client_host *host,
 	if (http_client_peer_addr_is_https(&addr) &&
 		host->client->ssl_ctx == NULL) {
 		if (http_client_init_ssl_ctx(host->client, &error) < 0) {
-			http_client_request_error(req,
+			http_client_request_error(&req,
 				HTTP_CLIENT_REQUEST_ERROR_CONNECT_FAILED, error);
 			return;
 		}

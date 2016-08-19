@@ -22,9 +22,9 @@ struct zlib_ostream {
 
 	uint32_t crc, bytes32;
 
-	unsigned int gz:1;
-	unsigned int header_sent:1;
-	unsigned int flushed:1;
+	bool gz:1;
+	bool header_sent:1;
+	bool flushed:1;
 };
 
 static void o_stream_zlib_close(struct iostream_private *stream,
@@ -172,12 +172,7 @@ o_stream_zlib_send_flush(struct zlib_ostream *zstream, bool final)
 	bool done = FALSE;
 	int ret, flush;
 
-	if (zs->avail_in != 0) {
-		i_assert(zstream->ostream.ostream.last_failed_errno != 0);
-		zstream->ostream.ostream.stream_errno =
-			zstream->ostream.ostream.last_failed_errno;
-		return -1;
-	}
+	i_assert(zs->avail_in == 0);
 
 	if (zstream->flushed)
 		return 0;

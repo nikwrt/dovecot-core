@@ -60,11 +60,11 @@ struct dsync_mailbox_node {
 	/* last time the subscription state was changed, 0 if not known */
 	time_t last_subscription_change;
 	/* is this mailbox or directory subscribed? */
-	unsigned int subscribed:1;
+	bool subscribed:1;
 
 	/* Internal syncing flags: */
-	unsigned int sync_delayed_guid_change:1;
-	unsigned int sync_temporary_name:1;
+	bool sync_delayed_guid_change:1;
+	bool sync_temporary_name:1;
 };
 ARRAY_DEFINE_TYPE(dsync_mailbox_node, struct dsync_mailbox_node *);
 
@@ -194,7 +194,7 @@ dsync_mailbox_trees_sync_init(struct dsync_mailbox_tree *local_tree,
 			      enum dsync_mailbox_trees_sync_flags sync_flags);
 const struct dsync_mailbox_tree_sync_change *
 dsync_mailbox_trees_sync_next(struct dsync_mailbox_tree_sync_ctx *ctx);
-void dsync_mailbox_trees_sync_deinit(struct dsync_mailbox_tree_sync_ctx **ctx);
+int dsync_mailbox_trees_sync_deinit(struct dsync_mailbox_tree_sync_ctx **ctx);
 
 const char *dsync_mailbox_node_to_string(const struct dsync_mailbox_node *node);
 const char *

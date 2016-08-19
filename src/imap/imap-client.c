@@ -103,8 +103,8 @@ struct client *client_create(int fd_in, int fd_out, const char *session_id,
 	client->fd_in = fd_in;
 	client->fd_out = fd_out;
 	client->input = i_stream_create_fd(fd_in,
-					   set->imap_max_line_length, FALSE);
-	client->output = o_stream_create_fd(fd_out, (size_t)-1, FALSE);
+					   set->imap_max_line_length);
+	client->output = o_stream_create_fd(fd_out, (size_t)-1);
 	o_stream_set_no_error_handling(client->output, TRUE);
 	i_stream_set_name(client->input, "<imap client>");
 	o_stream_set_name(client->output, "<imap client>");
@@ -138,6 +138,12 @@ struct client *client_create(int fd_in, int fd_out, const char *session_id,
 		str_append(client->capability_string, CAPABILITY_STRING);
 		str_append_c(client->capability_string, ' ');
 		str_append(client->capability_string, set->imap_capability + 1);
+	}
+	if (!explicit_capability) {
+		if (client->set->imap_literal_minus)
+			str_append(client->capability_string, " LITERAL-");
+		else
+			str_append(client->capability_string, " LITERAL+");
 	}
 	if (user->fuzzy_search && !explicit_capability) {
 		/* Enable FUZZY capability only when it actually has
@@ -241,7 +247,7 @@ const char *client_stats(struct client *client)
 	struct var_expand_table *tab;
 	string_t *str;
 
-	tab = t_malloc(sizeof(static_tab));
+	tab = t_malloc_no0(sizeof(static_tab));
 	memcpy(tab, static_tab, sizeof(static_tab));
 
 	tab[0].value = dec2str(i_stream_get_absolute_offset(client->input));
@@ -480,6 +486,7 @@ client_cmd_append_timing_stats(struct client_command_context *cmd,
 {
 	unsigned int msecs_in_cmd, msecs_in_ioloop;
 	uint64_t ioloop_wait_usecs;
+	unsigned int msecs_since_cmd;
 
 	if (cmd->start_time.tv_sec == 0)
 		return;
@@ -488,12 +495,19 @@ client_cmd_append_timing_stats(struct client_command_context *cmd,
 	msecs_in_cmd = (cmd->running_usecs + 999) / 1000;
 	msecs_in_ioloop = (ioloop_wait_usecs -
 			   cmd->start_ioloop_wait_usecs + 999) / 1000;
+	msecs_since_cmd = timeval_diff_msecs(&ioloop_timeval,
+					     &cmd->last_run_timeval);
 
 	if (str_data(str)[str_len(str)-1] == '.')
 		str_truncate(str, str_len(str)-1);
-	str_printfa(str, " (%d.%03d + %d.%03d secs).",
+	str_printfa(str, " (%d.%03d + %d.%03d ",
 		    msecs_in_cmd / 1000, msecs_in_cmd % 1000,
 		    msecs_in_ioloop / 1000, msecs_in_ioloop % 1000);
+	if (msecs_since_cmd > 0) {
+		str_printfa(str, "+ %d.%03d ",
+			    msecs_since_cmd / 1000, msecs_since_cmd % 1000);
+	}
+	str_append(str, "secs).");
 }
 
 void client_send_tagline(struct client_command_context *cmd, const char *data)
@@ -506,6 +520,7 @@ void client_send_tagline(struct client_command_context *cmd, const char *data)
 
 	i_assert(!cmd->tagline_sent);
 	cmd->tagline_sent = TRUE;
+	cmd->tagline_reply = p_strdup(cmd->pool, data);
 
 	if (tag == NULL || *tag == '\0')
 		tag = "*";
@@ -526,13 +541,18 @@ void client_send_command_error(struct client_command_context *cmd,
 {
 	struct client *client = cmd->client;
 	const char *error, *cmd_name;
-	bool fatal;
+	enum imap_parser_error parse_error;
 
 	if (msg == NULL) {
-		msg = imap_parser_get_error(cmd->parser, &fatal);
-		if (fatal) {
+		msg = imap_parser_get_error(cmd->parser, &parse_error);
+		switch (parse_error) {
+		case IMAP_PARSE_ERROR_NONE:
+			i_unreached();
+		case IMAP_PARSE_ERROR_LITERAL_TOO_BIG:
 			client_disconnect_with_error(client, msg);
 			return;
+		default:
+			break;
 		}
 	}
 
@@ -583,9 +603,6 @@ bool client_read_args(struct client_command_context *cmd, unsigned int count,
 		str = t_str_new(256);
 		imap_write_args(str, *args_r);
 		cmd->args = p_strdup(cmd->pool, str_c(str));
-		cmd->start_time = ioloop_timeval;
-		cmd->start_ioloop_wait_usecs =
-			io_loop_get_wait_usecs(current_ioloop);
 
 		cmd->client->input_lock = NULL;
 		return TRUE;
@@ -722,6 +739,9 @@ struct client_command_context *client_command_alloc(struct client *client)
 	cmd = p_new(client->command_pool, struct client_command_context, 1);
 	cmd->client = client;
 	cmd->pool = client->command_pool;
+	cmd->start_time = ioloop_timeval;
+	cmd->last_run_timeval = ioloop_timeval;
+	cmd->start_ioloop_wait_usecs = io_loop_get_wait_usecs(current_ioloop);
 	p_array_init(&cmd->module_contexts, cmd->pool, 5);
 
 	DLLIST_PREPEND(&client->command_queue, cmd);
@@ -742,6 +762,8 @@ client_command_new(struct client *client)
 		cmd->parser =
 			imap_parser_create(client->input, client->output,
 					   client->set->imap_max_line_length);
+		if (client->set->imap_literal_minus)
+			imap_parser_enable_literal_minus(cmd->parser);
 	}
 	return cmd;
 }
@@ -1196,7 +1218,6 @@ int client_output(struct client *client)
 	if (client->to_idle_output != NULL)
 		timeout_reset(client->to_idle_output);
 
-	o_stream_cork(client->output);
 	if ((ret = o_stream_flush(client->output)) < 0) {
 		client_destroy(client, NULL);
 		return 1;
@@ -1205,12 +1226,17 @@ int client_output(struct client *client)
 	client_output_commands(client);
 	(void)cmd_sync_delayed(client);
 
-	o_stream_uncork(client->output);
 	imap_refresh_proctitle();
 	if (client->output->closed)
 		client_destroy(client, NULL);
-	else
+	else {
+		/* corking is added automatically by ostream-file. we need to
+		   uncork here before client_check_command_hangs() is called,
+		   because otherwise it can assert-crash due to ioloop not
+		   having IO_WRITE callback set for the ostream. */
+		o_stream_uncork(client->output);
 		client_continue_pending_input(client);
+	}
 	return ret;
 }
 

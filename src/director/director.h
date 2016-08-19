@@ -90,11 +90,11 @@ struct director {
 
 	/* director ring handshaking is complete.
 	   director can start serving clients. */
-	unsigned int ring_handshaked:1;
-	unsigned int ring_handshake_warning_sent:1;
-	unsigned int ring_synced:1;
-	unsigned int sync_frozen:1;
-	unsigned int sync_pending:1;
+	bool ring_handshaked:1;
+	bool ring_handshake_warning_sent:1;
+	bool ring_synced:1;
+	bool sync_frozen:1;
+	bool sync_pending:1;
 };
 
 extern bool director_debug;
@@ -174,6 +174,9 @@ void director_update_send_version(struct director *dir,
 				  unsigned int min_version, const char *cmd);
 
 int director_connect_host(struct director *dir, struct director_host *host);
+
+void directors_init(void);
+void directors_deinit(void);
 
 void dir_debug(const char *fmt, ...) ATTR_FORMAT(1, 2);
 

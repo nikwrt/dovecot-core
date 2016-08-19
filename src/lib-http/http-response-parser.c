@@ -73,6 +73,9 @@ static int http_response_parse_status(struct http_response_parser *parser)
 		return -1;
 	parser->response_status =
 		(p[0] - '0')*100 + (p[1] - '0')*10 + (p[2] - '0');
+	if (parser->response_status < 100 ||
+		parser->response_status >= 600)
+		return -1;
 	parser->parser.cur += 3;
 	return 1;
 }
@@ -233,8 +236,8 @@ http_response_parse_status_line(struct http_response_parser *parser)
 	size_t size, old_bytes = 0;
 	int ret;
 
-	while ((ret = i_stream_read_data(_parser->input, &begin, &size,
-					 old_bytes)) > 0) {
+	while ((ret = i_stream_read_bytes(_parser->input, &begin, &size,
+					  old_bytes + 1)) > 0) {
 		_parser->cur = begin;
 		_parser->end = _parser->cur + size;
 
@@ -392,7 +395,6 @@ int http_response_parse_next(struct http_response_parser *parser,
 	response->retry_after = retry_after;
 	response->payload = parser->parser.payload;
 	response->header = parser->parser.msg.header;
-	response->headers = *http_header_get_fields(response->header); /* FIXME: remove in v2.3 */
 	response->connection_options = parser->parser.msg.connection_options;
 	response->connection_close = parser->parser.msg.connection_close;
 	return 1;

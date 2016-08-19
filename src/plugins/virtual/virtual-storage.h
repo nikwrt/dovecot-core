@@ -102,35 +102,17 @@ struct virtual_backend_box {
 	/* mailbox metadata matching */
 	const char *metadata_entry, *metadata_value;
 
-	unsigned int open_tracked:1;
-	unsigned int open_failed:1;
-	unsigned int sync_seen:1;
-	unsigned int wildcard:1;
-	unsigned int clear_recent:1;
-	unsigned int negative_match:1;
-	unsigned int uids_nonsorted:1;
-	unsigned int search_args_initialized:1;
-	unsigned int deleted:1;
+	bool open_tracked:1;
+	bool open_failed:1;
+	bool sync_seen:1;
+	bool wildcard:1;
+	bool clear_recent:1;
+	bool negative_match:1;
+	bool uids_nonsorted:1;
+	bool search_args_initialized:1;
+	bool deleted:1;
 };
 ARRAY_DEFINE_TYPE(virtual_backend_box, struct virtual_backend_box *);
-
-struct virtual_mailbox_vfuncs {
-	/* convert backend UIDs to virtual UIDs. if some backend UID doesn't
-	   exist in mailbox, it's simply ignored */
-	void (*get_virtual_uids)(struct mailbox *box,
-				 struct mailbox *backend_mailbox,
-				 const ARRAY_TYPE(seq_range) *backend_uids,
-				 ARRAY_TYPE(seq_range) *virtual_uids_r);
-	/* like get_virtual_uids(), but if a backend UID doesn't exist,
-	   convert it to 0. */
-	void (*get_virtual_uid_map)(struct mailbox *box,
-				    struct mailbox *backend_mailbox,
-				    const ARRAY_TYPE(seq_range) *backend_uids,
-				    ARRAY_TYPE(uint32_t) *virtual_uids_r);
-	void (*get_virtual_backend_boxes)(struct mailbox *box,
-					  ARRAY_TYPE(mailboxes) *mailboxes,
-					  bool only_with_msgs);
-};
 
 struct virtual_mailbox {
 	struct mailbox box;
@@ -161,14 +143,12 @@ struct virtual_mailbox {
 	ARRAY_TYPE(mailbox_virtual_patterns) list_include_patterns;
 	ARRAY_TYPE(mailbox_virtual_patterns) list_exclude_patterns;
 
-	struct virtual_mailbox_vfuncs vfuncs;
-
-	unsigned int uids_mapped:1;
-	unsigned int sync_initialized:1;
-	unsigned int inconsistent:1;
-	unsigned int have_guid_flags_set:1;
-	unsigned int have_guids:1;
-	unsigned int have_save_guids:1;
+	bool uids_mapped:1;
+	bool sync_initialized:1;
+	bool inconsistent:1;
+	bool have_guid_flags_set:1;
+	bool have_guids:1;
+	bool have_save_guids:1;
 };
 
 extern MODULE_CONTEXT_DEFINE(virtual_storage_module,

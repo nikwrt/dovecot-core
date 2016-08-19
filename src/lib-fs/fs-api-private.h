@@ -2,6 +2,7 @@
 #define FS_API_PRIVATE_H
 
 #include "fs-api.h"
+#include "fs-wrapper.h"
 #include "module-context.h"
 
 #include <sys/time.h>
@@ -34,7 +35,7 @@ struct fs_vfuncs {
 	void (*set_async_callback)(struct fs_file *file,
 				   fs_file_async_callback_t *callback,
 				   void *context);
-	int (*wait_async)(struct fs *fs);
+	void (*wait_async)(struct fs *fs);
 
 	void (*set_metadata)(struct fs_file *file, const char *key,
 			     const char *value);
@@ -48,6 +49,8 @@ struct fs_vfuncs {
 
 	int (*write)(struct fs_file *file, const void *data, size_t size);
 	void (*write_stream)(struct fs_file *file);
+	/* After write_stream_finish() is called once, all the following
+	   (async) calls will have success==TRUE. */
 	int (*write_stream_finish)(struct fs_file *file, bool success);
 
 	int (*lock)(struct fs_file *file, unsigned int secs,
@@ -64,6 +67,9 @@ struct fs_vfuncs {
 				     enum fs_iter_flags flags);
 	const char *(*iter_next)(struct fs_iter *iter);
 	int (*iter_deinit)(struct fs_iter *iter);
+
+	bool (*switch_ioloop)(struct fs *fs);
+	int (*get_nlinks)(struct fs_file *file, nlink_t *nlinks_r);
 };
 
 struct fs {
@@ -94,6 +100,7 @@ struct fs_file {
 	/* linked list of all files */
 	struct fs_file *prev, *next;
 
+	struct fs_file *parent; /* for wrapper filesystems */
 	struct fs *fs;
 	struct ostream *output;
 	char *path;
@@ -114,12 +121,14 @@ struct fs_file {
 
 	struct timeval timing_start[FS_OP_COUNT];
 
-	unsigned int write_pending:1;
-	unsigned int metadata_changed:1;
+	bool write_pending:1;
+	bool writing_stream:1;
+	bool metadata_changed:1;
 
-	unsigned int read_or_prefetch_counted:1;
-	unsigned int lookup_metadata_counted:1;
-	unsigned int stat_counted:1;
+	bool read_or_prefetch_counted:1;
+	bool lookup_metadata_counted:1;
+	bool stat_counted:1;
+	bool istream_open:1;
 };
 
 struct fs_lock {
@@ -145,6 +154,7 @@ extern const struct fs fs_class_randomfail;
 extern const struct fs fs_class_metawrap;
 extern const struct fs fs_class_sis;
 extern const struct fs fs_class_sis_queue;
+extern const struct fs fs_class_test;
 
 void fs_class_register(const struct fs *fs_class);
 
@@ -156,6 +166,7 @@ void fs_set_error_async(struct fs *fs);
 ssize_t fs_read_via_stream(struct fs_file *file, void *buf, size_t size);
 int fs_write_via_stream(struct fs_file *file, const void *data, size_t size);
 void fs_metadata_init(struct fs_file *file);
+void fs_metadata_init_or_clear(struct fs_file *file);
 void fs_default_set_metadata(struct fs_file *file,
 			     const char *key, const char *value);
 int fs_default_copy(struct fs_file *src, struct fs_file *dest);

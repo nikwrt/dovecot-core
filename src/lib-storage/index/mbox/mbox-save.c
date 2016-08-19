@@ -52,9 +52,9 @@ struct mbox_save_context {
 	struct mbox_md5_context *mbox_md5_ctx;
 	char *x_delivery_id_header;
 
-	unsigned int synced:1;
-	unsigned int failed:1;
-	unsigned int finished:1;
+	bool synced:1;
+	bool failed:1;
+	bool finished:1;
 };
 
 static void write_error(struct mbox_save_context *ctx)
@@ -642,7 +642,7 @@ int mbox_save_continue(struct mail_save_context *_ctx)
 
 	i_assert(ctx->last_char == '\n');
 
-	if (ctx->mbox_md5_ctx) {
+	if (ctx->mbox_md5_ctx != NULL) {
 		unsigned char hdr_md5_sum[16];
 
 		if (ctx->x_delivery_id_header != NULL) {

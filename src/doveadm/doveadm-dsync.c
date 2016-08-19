@@ -17,6 +17,7 @@
 #include "settings-parser.h"
 #include "imap-util.h"
 #include "master-service.h"
+#include "master-service-settings.h"
 #include "master-service-ssl-settings.h"
 #include "mail-storage.h"
 #include "mail-storage-service.h"
@@ -38,7 +39,7 @@
 #include <ctype.h>
 #include <sys/wait.h>
 
-#define DSYNC_COMMON_GETOPT_ARGS "+1a:dDEfg:l:m:n:NO:Pr:s:t:T:Ux:"
+#define DSYNC_COMMON_GETOPT_ARGS "+1a:dDEfg:l:m:n:NO:Pr:Rs:t:T:Ux:"
 #define DSYNC_REMOTE_CMD_EXIT_WAIT_SECS 30
 /* The broken_char is mainly set to get a proper error message when trying to
    convert a mailbox with a name that can't be used properly translated between
@@ -66,6 +67,7 @@ struct dsync_cmd_context {
 	ARRAY_TYPE(const_string) exclude_mailboxes;
 	ARRAY_TYPE(const_string) namespace_prefixes;
 	time_t sync_since_timestamp;
+	uoff_t sync_max_size;
 	unsigned int io_timeout_secs;
 
 	const char *remote_name;
@@ -90,19 +92,20 @@ struct dsync_cmd_context {
 
 	unsigned int lock_timeout;
 
-	unsigned int lock:1;
-	unsigned int purge_remote:1;
-	unsigned int sync_visible_namespaces:1;
-	unsigned int default_replica_location:1;
-	unsigned int oneway:1;
-	unsigned int backup:1;
-	unsigned int reverse_backup:1;
-	unsigned int remote_user_prefix:1;
-	unsigned int no_mail_sync:1;
-	unsigned int no_mailbox_renames:1;
-	unsigned int local_location_from_arg:1;
-	unsigned int replicator_notify:1;
-	unsigned int exited:1;
+	bool lock:1;
+	bool purge_remote:1;
+	bool sync_visible_namespaces:1;
+	bool default_replica_location:1;
+	bool oneway:1;
+	bool backup:1;
+	bool reverse_backup:1;
+	bool remote_user_prefix:1;
+	bool no_mail_sync:1;
+	bool no_mailbox_renames:1;
+	bool local_location_from_arg:1;
+	bool replicator_notify:1;
+	bool exited:1;
+	bool empty_hdr_workaround:1;
 };
 
 static bool legacy_dsync = FALSE;
@@ -180,7 +183,7 @@ run_cmd(struct dsync_cmd_context *ctx, const char *const *args)
 	}
 
 	fd_set_nonblock(ctx->fd_err, TRUE);
-	ctx->err_stream = i_stream_create_fd(ctx->fd_err, IO_BLOCK_SIZE, FALSE);
+	ctx->err_stream = i_stream_create_fd(ctx->fd_err, IO_BLOCK_SIZE);
 	i_stream_set_return_partial_line(ctx->err_stream, TRUE);
 }
 
@@ -226,7 +229,7 @@ get_ssh_cmd_args(const char *host, const char *login, const char *mail_user)
 	string_t *str, *str2;
 	const char *value, *const *args;
 
-	tab = t_malloc(sizeof(static_tab));
+	tab = t_malloc_no0(sizeof(static_tab));
 	memcpy(tab, static_tab, sizeof(static_tab));
 
 	tab[0].value = mail_user;
@@ -334,7 +337,7 @@ cmd_dsync_run_local(struct dsync_cmd_context *ctx, struct mail_user *user,
 	struct dsync_brain *brain2;
 	struct mail_user *user2;
 	struct setting_parser_context *set_parser;
-	const char *set_line, *location;
+	const char *set_line, *location, *error;
 	bool brain1_running, brain2_running, changed1, changed2;
 	int ret;
 
@@ -356,8 +359,10 @@ cmd_dsync_run_local(struct dsync_cmd_context *ctx, struct mail_user *user,
 	if (settings_parse_line(set_parser, set_line) < 0)
 		i_unreached();
 	ret = mail_storage_service_next(ctx->ctx.storage_service,
-					ctx->ctx.cur_service_user, &user2);
+					ctx->ctx.cur_service_user,
+					&user2, &error);
 	if (ret < 0) {
+		i_error("Failed to initialize user: %s", error);
 		ctx->ctx.exit_code = ret == -1 ? EX_TEMPFAIL : EX_CONFIG;
 		return -1;
 	}
@@ -458,7 +463,7 @@ static void cmd_dsync_log_remote_status(int status, bool remote_errors_logged,
 
 static void cmd_dsync_run_remote(struct mail_user *user)
 {
-	i_set_failure_prefix("dsync-local(%s): ", user->username);
+	i_set_failure_prefix("dsync-local(%s)<%s>: ", user->username, user->session_id);
 	io_loop_run(current_ioloop);
 }
 
@@ -484,8 +489,8 @@ cmd_dsync_icb_stream_init(struct dsync_cmd_context *ctx,
 	if (ctx->input == NULL) {
 		fd_set_nonblock(ctx->fd_in, TRUE);
 		fd_set_nonblock(ctx->fd_out, TRUE);
-		ctx->input = i_stream_create_fd(ctx->fd_in, (size_t)-1, FALSE);
-		ctx->output = o_stream_create_fd(ctx->fd_out, (size_t)-1, FALSE);
+		ctx->input = i_stream_create_fd(ctx->fd_in, (size_t)-1);
+		ctx->output = o_stream_create_fd(ctx->fd_out, (size_t)-1);
 	} else {
 		ctx->input_orig_bufsize = i_stream_get_max_buffer_size(ctx->input);
 		ctx->output_orig_bufsize = o_stream_get_max_buffer_size(ctx->output);
@@ -564,6 +569,7 @@ cmd_dsync_run(struct doveadm_mail_cmd_context *_ctx, struct mail_user *user)
 			"%s ", net_ip2addr(&_ctx->cur_client_ip));
 	}
 	set.sync_since_timestamp = ctx->sync_since_timestamp;
+	set.sync_max_size = ctx->sync_max_size;
 	set.sync_box = ctx->mailbox;
 	set.sync_flag = ctx->sync_flags;
 	set.virtual_all_box = ctx->virtual_all_box;
@@ -571,6 +577,7 @@ cmd_dsync_run(struct doveadm_mail_cmd_context *_ctx, struct mail_user *user)
 	set.lock_timeout_secs = ctx->lock_timeout;
 	set.state = ctx->state_input;
 	set.mailbox_alt_char = doveadm_settings->dsync_alt_char[0];
+
 	if (array_count(&ctx->exclude_mailboxes) > 0) {
 		/* array is NULL-terminated in init() */
 		set.exclude_mailboxes = array_idx(&ctx->exclude_mailboxes, 0);
@@ -609,15 +616,19 @@ cmd_dsync_run(struct doveadm_mail_cmd_context *_ctx, struct mail_user *user)
 	if (ctx->no_mailbox_renames)
 		brain_flags |= DSYNC_BRAIN_FLAG_NO_MAILBOX_RENAMES;
 
-	if (ctx->reverse_backup)
-		brain_flags |= DSYNC_BRAIN_FLAG_BACKUP_RECV;
-	else if (ctx->backup)
-		brain_flags |= DSYNC_BRAIN_FLAG_BACKUP_SEND;
+	if (ctx->backup) {
+		if (ctx->reverse_backup)
+			brain_flags |= DSYNC_BRAIN_FLAG_BACKUP_RECV;
+		else
+			brain_flags |= DSYNC_BRAIN_FLAG_BACKUP_SEND;
+	}
 
 	if (ctx->no_mail_sync)
 		brain_flags |= DSYNC_BRAIN_FLAG_NO_MAIL_SYNC;
 	if (ctx->oneway)
 		brain_flags |= DSYNC_BRAIN_FLAG_NO_BACKUP_OVERWRITE;
+	if (ctx->empty_hdr_workaround)
+		brain_flags |= DSYNC_BRAIN_FLAG_EMPTY_HDR_WORKAROUND;
 	if (doveadm_debug)
 		brain_flags |= DSYNC_BRAIN_FLAG_DEBUG;
 
@@ -946,7 +957,7 @@ static bool
 cmd_mailbox_dsync_parse_arg(struct doveadm_mail_cmd_context *_ctx, int c)
 {
 	struct dsync_cmd_context *ctx = (struct dsync_cmd_context *)_ctx;
-	const char *str;
+	const char *str, *error;
 
 	switch (c) {
 	case '1':
@@ -1029,6 +1040,10 @@ cmd_mailbox_dsync_parse_arg(struct doveadm_mail_cmd_context *_ctx, int c)
 		if (mail_parse_human_timestamp(optarg, &ctx->sync_since_timestamp) < 0)
 			i_fatal("Invalid -t parameter: %s", optarg);
 		break;
+	case 'S':
+		if (settings_get_size(optarg, &ctx->sync_max_size, &error) < 0)
+			i_fatal("Invalid -S parameter '%s': %s", optarg, error);
+		break;
 	case 'T':
 		if (str_to_uint(optarg, &ctx->io_timeout_secs) < 0)
 			i_fatal("Invalid -T parameter: %s", optarg);
@@ -1042,9 +1057,13 @@ cmd_mailbox_dsync_parse_arg(struct doveadm_mail_cmd_context *_ctx, int c)
 	return TRUE;
 }
 
-static void cmd_dsync_init_common(struct dsync_cmd_context *ctx)
+static struct doveadm_mail_cmd_context *cmd_dsync_alloc(void)
 {
+	struct dsync_cmd_context *ctx;
+
+	ctx = doveadm_mail_cmd_alloc(struct dsync_cmd_context);
 	ctx->io_timeout_secs = DSYNC_DEFAULT_IO_STREAM_TIMEOUT_SECS;
+	ctx->ctx.getopt_args = DSYNC_COMMON_GETOPT_ARGS;
 	ctx->ctx.v.parse_arg = cmd_mailbox_dsync_parse_arg;
 	ctx->ctx.v.preinit = cmd_dsync_preinit;
 	ctx->ctx.v.init = cmd_dsync_init;
@@ -1056,27 +1075,20 @@ static void cmd_dsync_init_common(struct dsync_cmd_context *ctx)
 			     DOVEADM_PRINT_HEADER_FLAG_HIDE_TITLE);
 	p_array_init(&ctx->exclude_mailboxes, ctx->ctx.pool, 4);
 	p_array_init(&ctx->namespace_prefixes, ctx->ctx.pool, 4);
-}
-
-static struct doveadm_mail_cmd_context *cmd_dsync_alloc(void)
-{
-	struct dsync_cmd_context *ctx;
-
-	ctx = doveadm_mail_cmd_alloc(struct dsync_cmd_context);
-	ctx->ctx.getopt_args = DSYNC_COMMON_GETOPT_ARGS;
-	cmd_dsync_init_common(ctx);
+        if ((doveadm_settings->parsed_features & DSYNC_FEATURE_EMPTY_HDR_WORKAROUND) != 0)
+                ctx->empty_hdr_workaround = TRUE;
 	return &ctx->ctx;
 }
 
 static struct doveadm_mail_cmd_context *cmd_dsync_backup_alloc(void)
 {
+	struct doveadm_mail_cmd_context *_ctx;
 	struct dsync_cmd_context *ctx;
 
-	ctx = doveadm_mail_cmd_alloc(struct dsync_cmd_context);
+	_ctx = cmd_dsync_alloc();
+	ctx = (struct dsync_cmd_context *)_ctx;
 	ctx->backup = TRUE;
-	ctx->ctx.getopt_args = DSYNC_COMMON_GETOPT_ARGS"R";
-	cmd_dsync_init_common(ctx);
-	return &ctx->ctx;
+	return _ctx;
 }
 
 static int
@@ -1109,7 +1121,7 @@ cmd_dsync_server_run(struct doveadm_mail_cmd_context *_ctx,
 	} else {
 		/* the log messages go via stderr to the remote dsync,
 		   so the names are reversed */
-		i_set_failure_prefix("dsync-remote(%s): ", user->username);
+		i_set_failure_prefix("dsync-remote(%s)<%s>: ", user->username, user->session_id);
 		name = "local";
 	}
 
@@ -1180,6 +1192,7 @@ static struct doveadm_mail_cmd_context *cmd_dsync_server_alloc(void)
 	ctx->ctx.v.parse_arg = cmd_mailbox_dsync_server_parse_arg;
 	ctx->ctx.v.run = cmd_dsync_server_run;
 	ctx->sync_type = DSYNC_BRAIN_SYNC_TYPE_CHANGED;
+
 	ctx->fd_in = STDIN_FILENO;
 	ctx->fd_out = STDOUT_FILENO;
 	return &ctx->ctx;
@@ -1187,7 +1200,7 @@ static struct doveadm_mail_cmd_context *cmd_dsync_server_alloc(void)
 
 struct doveadm_mail_cmd cmd_dsync_mirror = {
 	cmd_dsync_alloc, "sync",
-	"[-1fPU] [-l <secs>] [-r <rawlog path>] [-m <mailbox>] [-g <mailbox_guid>] [-n <namespace> | -N] [-x <exclude>] [-s <state>] -d|<dest>"
+	"[-1fPRU] [-l <secs>] [-r <rawlog path>] [-m <mailbox>] [-g <mailbox_guid>] [-n <namespace> | -N] [-x <exclude>] [-s <state>] -d|<dest>"
 };
 struct doveadm_mail_cmd cmd_dsync_backup = {
 	cmd_dsync_backup_alloc, "backup",

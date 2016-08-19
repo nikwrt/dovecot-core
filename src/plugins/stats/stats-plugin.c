@@ -18,7 +18,7 @@
    Must be smaller than MAIL_SESSION_IDLE_TIMEOUT_MSECS in stats server */
 #define SESSION_STATS_FORCE_REFRESH_SECS (5*60)
 #define REFRESH_CHECK_INTERVAL 100
-#define MAIL_STATS_SOCKET_NAME "stats-mail"
+#define MAIL_STATS_FIFO_NAME "stats-mail"
 
 struct stats_storage {
 	union mail_storage_module_context module_ctx;
@@ -379,8 +379,11 @@ static void stats_user_created(struct mail_user *user)
 	}
 
 	if (global_stats_conn == NULL) {
-		path = t_strconcat(user->set->base_dir,
-				   "/"MAIL_STATS_SOCKET_NAME, NULL);
+		path = mail_user_plugin_getenv(user, "stats_notify_path");
+		if (path == NULL)
+			path = MAIL_STATS_FIFO_NAME;
+		if (path[0] != '/')
+			path = t_strconcat(user->set->base_dir, "/", path, NULL);
 		global_stats_conn = stats_connection_create(path);
 	}
 	stats_connection_ref(global_stats_conn);
@@ -407,8 +410,7 @@ static void stats_user_created(struct mail_user *user)
 	v->stats_fill = stats_user_stats_fill;
 
 	suser->refresh_secs = refresh_secs;
-	str = mail_user_plugin_getenv(user, "stats_track_cmds");
-	if (str != NULL && strcmp(str, "yes") == 0)
+	if (mail_user_plugin_getenv_bool(user, "stats_track_cmds"))
 		suser->track_commands = TRUE;
 
 	suser->stats_conn = global_stats_conn;

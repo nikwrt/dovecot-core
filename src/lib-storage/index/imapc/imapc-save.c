@@ -29,8 +29,8 @@ struct imapc_save_context {
 	ARRAY_TYPE(seq_range) dest_saved_uids;
 	unsigned int save_count;
 
-	unsigned int failed:1;
-	unsigned int finished:1;
+	bool failed:1;
+	bool finished:1;
 };
 
 struct imapc_save_cmd_context {
@@ -89,17 +89,11 @@ int imapc_save_begin(struct mail_save_context *_ctx, struct istream *input)
 int imapc_save_continue(struct mail_save_context *_ctx)
 {
 	struct imapc_save_context *ctx = (struct imapc_save_context *)_ctx;
-	struct mail_storage *storage = _ctx->transaction->box->storage;
 
 	if (ctx->failed)
 		return -1;
 
-	if (o_stream_send_istream(_ctx->data.output, ctx->input) < 0) {
-		if (!mail_storage_set_error_from_errno(storage)) {
-			mail_storage_set_critical(storage,
-				"o_stream_send_istream(%s) failed: %m",
-				ctx->temp_path);
-		}
+	if (index_storage_save_continue(_ctx, ctx->input, NULL) < 0) {
 		ctx->failed = TRUE;
 		return -1;
 	}
@@ -240,7 +234,7 @@ static int imapc_save_append(struct imapc_save_context *ctx)
 
 	ctx->mbox->exists_received = FALSE;
 
-	input = i_stream_create_fd(ctx->fd, IO_BLOCK_SIZE, FALSE);
+	input = i_stream_create_fd(ctx->fd, IO_BLOCK_SIZE);
 	sctx.ctx = ctx;
 	sctx.ret = -2;
 	cmd = imapc_client_cmd(ctx->mbox->storage->client->client,
@@ -261,6 +255,7 @@ static int imapc_save_append(struct imapc_save_context *ctx)
 		sctx.ret = -2;
 		cmd = imapc_client_cmd(ctx->mbox->storage->client->client,
 				       imapc_save_noop_callback, &sctx);
+		imapc_command_set_flags(cmd, IMAPC_COMMAND_FLAG_RETRIABLE);
 		imapc_command_send(cmd, "NOOP");
 		while (sctx.ret == -2)
 			imapc_mailbox_run(ctx->mbox);
@@ -279,7 +274,8 @@ int imapc_save_finish(struct mail_save_context *_ctx)
 		if (o_stream_nfinish(_ctx->data.output) < 0) {
 			if (!mail_storage_set_error_from_errno(storage)) {
 				mail_storage_set_critical(storage,
-					"write(%s) failed: %m", ctx->temp_path);
+					"write(%s) failed: %s", ctx->temp_path,
+					o_stream_get_error(_ctx->data.output));
 			}
 			ctx->failed = TRUE;
 		}

@@ -33,7 +33,6 @@ static void i_stream_rawlog_destroy(struct iostream_private *stream)
                /* get to same position in parent stream */
                i_stream_seek(rstream->istream.parent, v_offset);
        }
-       i_stream_unref(&rstream->istream.parent);
 }
 
 static ssize_t i_stream_rawlog_read(struct istream_private *stream)
@@ -83,7 +82,9 @@ i_stream_create_rawlog(struct istream *input, const char *rawlog_path,
 	i_assert(rawlog_path != NULL);
 	i_assert(rawlog_fd != -1);
 
-	rawlog_output = o_stream_create_fd(rawlog_fd, 0, autoclose_fd);
+	rawlog_output = autoclose_fd ?
+		o_stream_create_fd_autoclose(&rawlog_fd, 0) :
+		o_stream_create_fd(rawlog_fd, 0);
 	o_stream_set_name(rawlog_output,
 			  t_strdup_printf("rawlog(%s)", rawlog_path));
 	return i_stream_create_rawlog_from_stream(input, rawlog_output, flags);

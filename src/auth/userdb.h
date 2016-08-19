@@ -24,7 +24,6 @@ struct userdb_module {
 	const char *args;
 	/* The default caching key for this module, or NULL if caching isn't
 	   wanted. This is updated by settings in auth_userdb. */
-#define default_cache_key cache_key /* FIXME: remove in v2.3 - for API backwards compatibility */
 	const char *default_cache_key;
 
 	/* If blocking is set to TRUE, use child processes to access
@@ -81,7 +80,7 @@ void userdb_deinit(struct userdb_module *userdb);
 void userdb_register_module(struct userdb_module_interface *iface);
 void userdb_unregister_module(struct userdb_module_interface *iface);
 
-void userdbs_generate_md5(unsigned char md5[MD5_RESULTLEN]);
+void userdbs_generate_md5(unsigned char md5[STATIC_ARRAY MD5_RESULTLEN]);
 
 void userdbs_init(void);
 void userdbs_deinit(void);

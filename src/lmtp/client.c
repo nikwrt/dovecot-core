@@ -253,8 +253,8 @@ struct client *client_create(int fd_in, int fd_out,
 	client->local_ip = conn->local_ip;
 	client->local_port = conn->local_port;
 
-	client->input = i_stream_create_fd(fd_in, CLIENT_MAX_INPUT_SIZE, FALSE);
-	client->output = o_stream_create_fd(fd_out, (size_t)-1, FALSE);
+	client->input = i_stream_create_fd(fd_in, CLIENT_MAX_INPUT_SIZE);
+	client->output = o_stream_create_fd(fd_out, (size_t)-1);
 	o_stream_set_no_error_handling(client->output, TRUE);
 
 	client_io_reset(client);
@@ -343,6 +343,19 @@ void client_disconnect(struct client *client, const char *prefix,
 	client->disconnected = TRUE;
 }
 
+void client_rcpt_anvil_disconnect(const struct mail_recipient *rcpt)
+{
+	const struct mail_storage_service_input *input;
+
+	if (!rcpt->anvil_connect_sent)
+		return;
+
+	input = mail_storage_service_user_get_input(rcpt->service_user);
+	master_service_anvil_send(master_service, t_strconcat(
+		"DISCONNECT\t", my_pid, "\t", master_service_get_name(master_service),
+		"/", input->username, "\n", NULL));
+}
+
 void client_state_reset(struct client *client, const char *state_name)
 {
 	struct mail_recipient *const *rcptp;
@@ -354,6 +367,7 @@ void client_state_reset(struct client *client, const char *state_name)
 		array_foreach_modifiable(&client->state.rcpt_to, rcptp) {
 			if ((*rcptp)->anvil_query != NULL)
 				anvil_client_query_abort(anvil, &(*rcptp)->anvil_query);
+			client_rcpt_anvil_disconnect(*rcptp);
 			mail_storage_service_user_free(&(*rcptp)->service_user);
 		}
 	}

@@ -265,14 +265,14 @@ smtp_client_send_flush(struct smtp_client *smtp_client,
 	}
 
 	if (o_stream_nfinish(smtp_client->output) < 0) {
-		*error_r = t_strdup_printf("write(%s) failed: %m",
-					   smtp_client->temp_path);
+		*error_r = t_strdup_printf("write(%s) failed: %s",
+			smtp_client->temp_path, o_stream_get_error(smtp_client->output));
 		return -1;
 	}
 
 	if (o_stream_seek(smtp_client->output, 0) < 0) {
-		*error_r = t_strdup_printf("lseek(%s) failed: %m",
-					   smtp_client->temp_path);
+		*error_r = t_strdup_printf("lseek(%s) failed: %s",
+			smtp_client->temp_path, o_stream_get_error(smtp_client->output));
 		return -1;
 	}
 
@@ -300,7 +300,7 @@ smtp_client_send_flush(struct smtp_client *smtp_client,
 				     data_callback, smtp_client);
 	}
 
-	input = i_stream_create_fd(smtp_client->temp_fd, (size_t)-1, FALSE);
+	input = i_stream_create_fd(smtp_client->temp_fd, (size_t)-1);
 	lmtp_client_send(client, input);
 	i_stream_unref(&input);
 
@@ -361,36 +361,4 @@ int smtp_client_deinit_timeout(struct smtp_client *client,
 
 	smtp_client_abort(&client);
 	return ret;
-}
-
-struct smtp_client *
-smtp_client_open(const struct lda_settings *set, const char *destination,
-		 const char *return_path, struct ostream **output_r)
-{
-	struct smtp_client *client;
-
-	client = smtp_client_init(set, return_path);
-	smtp_client_add_rcpt(client, destination);
-	*output_r = smtp_client_send(client);
-	return client;
-}
-
-int smtp_client_close(struct smtp_client *client)
-{
-	const char *error;
-	int ret;
-
-	if (!client->use_smtp)
-		return smtp_client_deinit_sendmail(client);
-
-	ret = smtp_client_deinit(client, &error);
-	if (ret < 0) {
-		i_error("%s", error);
-		return EX_TEMPFAIL;
-	}
-	if (ret == 0) {
-		i_error("%s", error);
-		return EX_NOPERM;
-	}
-	return 0;
 }

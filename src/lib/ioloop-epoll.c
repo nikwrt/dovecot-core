@@ -72,11 +72,11 @@ static int epoll_event_mask(struct io_list *list)
 		if (io == NULL)
 			continue;
 
-		if (io->io.condition & IO_READ)
+		if ((io->io.condition & IO_READ) != 0)
 			events |= IO_EPOLL_INPUT;
-		if (io->io.condition & IO_WRITE)
+		if ((io->io.condition & IO_WRITE) != 0)
 			events |= IO_EPOLL_OUTPUT;
-		if (io->io.condition & IO_ERROR)
+		if ((io->io.condition & IO_ERROR) != 0)
 			events |= IO_EPOLL_ERROR;
 	}
 
@@ -105,7 +105,7 @@ void io_loop_handle_add(struct io_file *io)
 
 	if (epoll_ctl(ctx->epfd, op, io->fd, &event) < 0) {
 		if (errno == EPERM && op == EPOLL_CTL_ADD) {
-			i_fatal("epoll_ctl(add, %d) failed: %m "
+			i_panic("epoll_ctl(add, %d) failed: %m "
 				"(fd doesn't support epoll%s)", io->fd,
 				io->fd != STDIN_FILENO ? "" :
 				" - instead of '<file', try 'cat file|'");
@@ -184,7 +184,8 @@ void io_loop_handler_run_internal(struct ioloop *ioloop)
 	} else {
 		/* no I/Os, but we should have some timeouts.
 		   just wait for them. */
-		i_assert(msecs >= 0);
+		if (msecs < 0)
+			i_panic("BUG: No IOs or timeouts set. Not waiting for infinity.");
 		usleep(msecs*1000);
 		ret = 0;
 	}

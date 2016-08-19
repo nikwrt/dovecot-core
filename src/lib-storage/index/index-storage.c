@@ -3,6 +3,7 @@
 #include "lib.h"
 #include "array.h"
 #include "istream.h"
+#include "ostream.h"
 #include "ioloop.h"
 #include "str.h"
 #include "mkdir-parents.h"
@@ -244,7 +245,7 @@ int index_storage_mailbox_open(struct mailbox *box, bool move_to_memory)
 
 	index_flags = ibox->index_flags;
 	if (move_to_memory)
-		ibox->index_flags &= ~MAIL_INDEX_OPEN_FLAG_CREATE;
+		index_flags &= ~MAIL_INDEX_OPEN_FLAG_CREATE;
 
 	if (index_storage_mailbox_alloc_index(box) < 0)
 		return -1;
@@ -293,6 +294,9 @@ int index_storage_mailbox_open(struct mailbox *box, bool move_to_memory)
 		mail_index_ext_register(box->index, "hdr-vsize",
 					sizeof(struct mailbox_index_vsize), 0,
 					sizeof(uint64_t));
+	box->pop3_uidl_hdr_ext_id =
+		mail_index_ext_register(box->index, "hdr-pop3-uidl",
+					sizeof(struct mailbox_index_pop3_uidl), 0, 0);
 
 	box->opened = TRUE;
 
@@ -330,6 +334,8 @@ void index_storage_mailbox_alloc(struct mailbox *box, const char *vname,
 		mail_storage_settings_to_index_flags(box->storage->set);
 	if ((box->flags & MAILBOX_FLAG_SAVEONLY) != 0)
 		ibox->index_flags |= MAIL_INDEX_OPEN_FLAG_SAVEONLY;
+	if (box->storage->user->mail_debug)
+		ibox->index_flags |= MAIL_INDEX_OPEN_FLAG_DEBUG;
 	ibox->next_lock_notify = time(NULL) + LOCK_NOTIFY_INTERVAL;
 	MODULE_CONTEXT_SET(box, index_storage_module, ibox);
 
@@ -715,7 +721,13 @@ int index_storage_mailbox_delete_pre(struct mailbox *box)
 		if (mailbox_sync(box, MAILBOX_SYNC_FLAG_FULL_READ) < 0)
 			return -1;
 		mailbox_get_open_status(box, STATUS_MESSAGES, &status);
-		if (status.messages != 0) {
+		if (status.messages == 0)
+			;
+		else if (box->deleting_must_be_empty) {
+			mail_storage_set_error(box->storage, MAIL_ERROR_EXISTS,
+					       "Mailbox isn't empty");
+			return -1;
+		} else {
 			mail_storage_set_error(box->storage, MAIL_ERROR_EXISTS,
 				"New mails were added to mailbox during deletion");
 			return -1;
@@ -943,7 +955,7 @@ int index_storage_set_subscribed(struct mailbox *box, bool set)
 void index_storage_destroy(struct mail_storage *storage)
 {
 	if (storage->_shared_attr_dict != NULL) {
-		(void)dict_wait(storage->_shared_attr_dict);
+		dict_wait(storage->_shared_attr_dict);
 		dict_deinit(&storage->_shared_attr_dict);
 	}
 }
@@ -1010,9 +1022,51 @@ int index_storage_expunged_sync_begin(struct mailbox *box,
 		/* race condition - need to abort the sync and retry with
 		   the vsize locked */
 		mail_index_sync_rollback(ctx_r);
-		index_storage_expunging_init(box);
+		index_storage_expunging_deinit(box);
 		return index_storage_expunged_sync_begin(box, ctx_r, view_r,
 							 trans_r, flags);
 	}
 	return 1;
+}
+
+int index_storage_save_continue(struct mail_save_context *ctx,
+				struct istream *input,
+				struct mail *cache_dest_mail)
+{
+	struct mail_storage *storage = ctx->transaction->box->storage;
+
+	do {
+		switch (o_stream_send_istream(ctx->data.output, input)) {
+		case OSTREAM_SEND_ISTREAM_RESULT_FINISHED:
+			break;
+		case OSTREAM_SEND_ISTREAM_RESULT_WAIT_INPUT:
+			break;
+		case OSTREAM_SEND_ISTREAM_RESULT_WAIT_OUTPUT:
+			i_unreached();
+		case OSTREAM_SEND_ISTREAM_RESULT_ERROR_INPUT:
+			/* handle below */
+			break;
+		case OSTREAM_SEND_ISTREAM_RESULT_ERROR_OUTPUT:
+			if (!mail_storage_set_error_from_errno(storage)) {
+				mail_storage_set_critical(storage,
+					"save: write(%s) failed: %s",
+					o_stream_get_name(ctx->data.output),
+					o_stream_get_error(ctx->data.output));
+			}
+			return -1;
+		}
+		if (cache_dest_mail != NULL)
+			index_mail_cache_parse_continue(cache_dest_mail);
+
+		/* both tee input readers may consume data from our primary
+		   input stream. we'll have to make sure we don't return with
+		   one of the streams still having data in them. */
+	} while (i_stream_read(input) > 0);
+
+	if (input->stream_errno != 0) {
+		mail_storage_set_critical(storage, "save: read(%s) failed: %s",
+			i_stream_get_name(input), i_stream_get_error(input));
+		return -1;
+	}
+	return 0;
 }

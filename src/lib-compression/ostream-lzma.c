@@ -17,7 +17,7 @@ struct lzma_ostream {
 	unsigned char outbuf[CHUNK_SIZE];
 	unsigned int outbuf_offset, outbuf_used;
 
-	unsigned int flushed:1;
+	bool flushed:1;
 };
 
 static void o_stream_lzma_close(struct iostream_private *stream,
@@ -109,12 +109,7 @@ static int o_stream_lzma_send_flush(struct lzma_ostream *zstream)
 	bool done = FALSE;
 	int ret;
 
-	if (zs->avail_in != 0) {
-		i_assert(zstream->ostream.ostream.last_failed_errno != 0);
-		zstream->ostream.ostream.stream_errno =
-			zstream->ostream.ostream.last_failed_errno;
-		return -1;
-	}
+	i_assert(zs->avail_in == 0);
 
 	if (zstream->flushed)
 		return 0;

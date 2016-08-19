@@ -68,7 +68,7 @@ doveadm_cmd_server_post(struct client_connection *conn, const char *cmd_name)
 
 static void
 doveadm_cmd_server_run_ver2(struct client_connection *conn,
-			    int argc, const char **argv,
+			    int argc, const char *const argv[],
 			    struct doveadm_cmd_context *cctx)
 {
 	i_getopt_reset();
@@ -80,7 +80,7 @@ doveadm_cmd_server_run_ver2(struct client_connection *conn,
 
 static void
 doveadm_cmd_server_run(struct client_connection *conn,
-		       int argc, const char **argv,
+		       int argc, const char *const argv[],
 		       const struct doveadm_cmd *cmd)
 {
 	i_getopt_reset();
@@ -92,7 +92,7 @@ doveadm_cmd_server_run(struct client_connection *conn,
 static int
 doveadm_mail_cmd_server_parse(const struct doveadm_mail_cmd *cmd,
 			      const struct doveadm_settings *set,
-			      int argc, const char **argv,
+			      int argc, const char *const argv[],
 			      struct doveadm_cmd_context *cctx,
 			      struct doveadm_mail_cmd_context **mctx_r)
 {
@@ -225,7 +225,7 @@ bool doveadm_client_is_allowed_command(const struct doveadm_settings *set,
 
 static int doveadm_cmd_handle(struct client_connection *conn,
 			      const char *cmd_name,
-			      int argc, const char **argv,
+			      int argc, const char *const argv[],
 			      struct doveadm_cmd_context *cctx)
 {
 	struct ioloop *ioloop, *prev_ioloop = current_ioloop;
@@ -234,7 +234,7 @@ static int doveadm_cmd_handle(struct client_connection *conn,
 	struct doveadm_mail_cmd_context *mctx;
 	const struct doveadm_cmd_ver2 *cmd_ver2;
 
-	if ((cmd_ver2 = doveadm_cmd_find_with_args_ver2(cmd_name, argc, argv)) == NULL) {
+	if ((cmd_ver2 = doveadm_cmd_find_with_args_ver2(cmd_name, &argc, &argv)) == NULL) {
 		mail_cmd = doveadm_mail_cmd_find(cmd_name);
 		if (mail_cmd == NULL) {
 			cmd = doveadm_cmd_find_with_args(cmd_name, &argc, &argv);
@@ -292,11 +292,13 @@ static bool client_handle_command(struct client_connection *conn, char **args)
 	}
 	memset(&cctx, 0, sizeof(cctx));
 	cctx.cli = FALSE;
+	cctx.tcp_server = TRUE;
 
 	cctx.local_ip = conn->local_ip;
 	cctx.remote_ip = conn->remote_ip;
 	cctx.local_port = conn->local_port;
 	cctx.remote_port = conn->remote_port;
+	cctx.conn = conn;
 
 	flags = args[0];
 	cctx.username = args[1];
@@ -548,8 +550,8 @@ client_connection_create(int fd, int listen_fd, bool ssl)
         doveadm_print_init(DOVEADM_PRINT_TYPE_SERVER);
 
 	conn->io = io_add(fd, IO_READ, client_connection_input, conn);
-	conn->input = i_stream_create_fd(fd, MAX_INBUF_SIZE, FALSE);
-	conn->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	conn->input = i_stream_create_fd(fd, MAX_INBUF_SIZE);
+	conn->output = o_stream_create_fd(fd, (size_t)-1);
 	i_stream_set_name(conn->input, net_ip2addr(&conn->remote_ip));
 	o_stream_set_name(conn->output, net_ip2addr(&conn->remote_ip));
 	o_stream_set_no_error_handling(conn->output, TRUE);

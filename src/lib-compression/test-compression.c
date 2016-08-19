@@ -67,9 +67,9 @@ static void test_compression_handler(const struct compression_handler *handler)
 
 	/* read and uncompress the data */
 	sha1_init(&sha1);
-	file_input = i_stream_create_fd(fd, IO_BLOCK_SIZE, FALSE);
+	file_input = i_stream_create_fd(fd, IO_BLOCK_SIZE);
 	input = handler->create_istream(file_input, FALSE);
-	while ((ret = i_stream_read_data(input, &data, &size, 0)) > 0) {
+	while ((ret = i_stream_read_more(input, &data, &size)) > 0) {
 		sha1_loop(&sha1, data, size);
 		i_stream_skip(input, size);
 	}
@@ -124,7 +124,7 @@ static void test_compress_file(const char *in_path, const char *out_path)
 	file_output = o_stream_create_fd_file(fd_out, 0, FALSE);
 	output = handler->create_ostream(file_output, 1);
 	input = i_stream_create_fd_autoclose(&fd_in, IO_BLOCK_SIZE);
-	while (i_stream_read_data(input, &data, &size, 0) > 0) {
+	while (i_stream_read_more(input, &data, &size) > 0) {
 		sha1_loop(&sha1, data, size);
 		o_stream_nsend(output, data, size);
 		i_stream_skip(input, size);
@@ -140,9 +140,9 @@ static void test_compress_file(const char *in_path, const char *out_path)
 
 	/* verify that we can read the compressed file */
 	sha1_init(&sha1);
-	file_input = i_stream_create_fd(fd_out, IO_BLOCK_SIZE, FALSE);
+	file_input = i_stream_create_fd(fd_out, IO_BLOCK_SIZE);
 	input = handler->create_istream(file_input, FALSE);
-	while ((ret = i_stream_read_data(input, &data, &size, 0)) > 0) {
+	while ((ret = i_stream_read_more(input, &data, &size)) > 0) {
 		sha1_loop(&sha1, data, size);
 		i_stream_skip(input, size);
 	}

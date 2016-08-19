@@ -11,7 +11,6 @@ struct sized_istream {
 	void *error_context;
 
 	uoff_t size;
-	bool failed;
 };
 
 static void i_stream_sized_destroy(struct iostream_private *stream)
@@ -26,7 +25,6 @@ static void i_stream_sized_destroy(struct iostream_private *stream)
 		/* get to same position in parent stream */
 		i_stream_seek(sstream->istream.parent, v_offset);
 	}
-	i_stream_unref(&sstream->istream.parent);
 }
 
 static const char *
@@ -41,7 +39,7 @@ i_stream_create_sized_default_error_callback(
 		return t_strdup_printf("Stream is larger than expected "
 			"(%"PRIuUOFF_T" > %"PRIuUOFF_T", eof=%d)",
 			data->v_offset + data->new_bytes, data->wanted_size,
-			data->eof);
+			data->eof ? 1 : 0);
 	}
 }
 
@@ -54,12 +52,6 @@ static ssize_t i_stream_sized_read(struct istream_private *stream)
 	uoff_t left;
 	ssize_t ret;
 	size_t pos;
-
-	if (sstream->failed) {
-		/* avoid duplicate errors */
-		stream->istream.stream_errno = EINVAL;
-		return -1;
-	}
 
 	if (stream->istream.v_offset +
 	    (stream->pos - stream->skip) >= sstream->size) {
@@ -98,12 +90,11 @@ static ssize_t i_stream_sized_read(struct istream_private *stream)
 		error = sstream->error_callback(&data, sstream->error_context);
 		io_stream_set_error(&stream->iostream, "%s", error);
 		i_error("read(%s) failed: %s",
-			i_stream_get_name(stream->parent),
+			i_stream_get_name(&stream->istream),
 			stream->iostream.error);
 		pos = left;
 		stream->istream.eof = TRUE;
 		stream->istream.stream_errno = EINVAL;
-		sstream->failed = TRUE;
 		return -1;
 	} else if (!stream->istream.eof) {
 		/* still more to read */
@@ -113,7 +104,7 @@ static ssize_t i_stream_sized_read(struct istream_private *stream)
 		error = sstream->error_callback(&data, sstream->error_context);
 		io_stream_set_error(&stream->iostream, "%s", error);
 		i_error("read(%s) failed: %s",
-			i_stream_get_name(stream->parent),
+			i_stream_get_name(&stream->istream),
 			stream->iostream.error);
 		stream->istream.stream_errno = EINVAL;
 	}

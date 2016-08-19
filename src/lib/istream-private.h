@@ -25,7 +25,7 @@ struct istream_private {
 	struct istream istream;
 
 	int fd;
-	uoff_t abs_start_offset;
+	uoff_t start_offset;
 	struct stat statbuf;
 	/* added by io_add_istream() -> i_stream_set_io() */
 	struct io *io;
@@ -49,10 +49,10 @@ struct istream_private {
 	unsigned int access_counter;
 
 	string_t *line_str; /* for i_stream_next_line() if w_buffer == NULL */
-	unsigned int line_crlf:1;
-	unsigned int return_nolf_line:1;
-	unsigned int stream_size_passthrough:1; /* stream is parent's size */
-	unsigned int nonpersistent_buffers:1;
+	bool line_crlf:1;
+	bool return_nolf_line:1;
+	bool stream_size_passthrough:1; /* stream is parent's size */
+	bool nonpersistent_buffers:1;
 };
 
 struct istream * ATTR_NOWARN_UNUSED_RESULT

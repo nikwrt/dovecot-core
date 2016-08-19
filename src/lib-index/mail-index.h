@@ -34,7 +34,9 @@ enum mail_index_open_flags {
 	MAIL_INDEX_OPEN_FLAG_NEVER_IN_MEMORY	= 0x200,
 	/* We're only going to save new messages to the index.
 	   Avoid unnecessary reads. */
-	MAIL_INDEX_OPEN_FLAG_SAVEONLY		= 0x400
+	MAIL_INDEX_OPEN_FLAG_SAVEONLY		= 0x400,
+	/* Enable debug logging */
+	MAIL_INDEX_OPEN_FLAG_DEBUG		= 0x800,
 };
 
 enum mail_index_header_compat_flags {
@@ -208,7 +210,7 @@ struct mail_index_view_sync_rec {
 	enum mail_index_view_sync_type type;
 
 	/* TRUE if this was a hidden transaction. */
-	unsigned int hidden:1;
+	bool hidden:1;
 };
 
 struct mail_index_transaction_commit_result {

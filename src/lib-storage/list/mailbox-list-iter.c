@@ -46,9 +46,9 @@ struct ns_list_iterate_context {
 	struct mailbox_info inbox_info;
 	const struct mailbox_info *pending_backend_info;
 
-	unsigned int cur_ns_prefix_sent:1;
-	unsigned int inbox_list:1;
-	unsigned int inbox_listed:1;
+	bool cur_ns_prefix_sent:1;
+	bool inbox_list:1;
+	bool inbox_listed:1;
 };
 
 static bool ns_match_next(struct ns_list_iterate_context *ctx, 
@@ -56,6 +56,8 @@ static bool ns_match_next(struct ns_list_iterate_context *ctx,
 static int mailbox_list_match_anything(struct ns_list_iterate_context *ctx,
 				       struct mail_namespace *ns,
 				       const char *prefix);
+
+static struct mailbox_list_iterate_context mailbox_list_iter_failed;
 
 struct mailbox_list_iterate_context *
 mailbox_list_iter_init(struct mailbox_list *list, const char *pattern,
@@ -167,8 +169,11 @@ mailbox_list_iter_init_multiple(struct mailbox_list *list,
 	i_assert(*patterns != NULL);
 
 	if ((flags & (MAILBOX_LIST_ITER_SELECT_SUBSCRIBED |
-		      MAILBOX_LIST_ITER_RETURN_SUBSCRIBED)) != 0)
+		      MAILBOX_LIST_ITER_RETURN_SUBSCRIBED)) != 0) {
 		ret = mailbox_list_iter_subscriptions_refresh(list);
+		if (ret < 0)
+			return &mailbox_list_iter_failed;
+	}
 
 	ctx = list->v.iter_init(list, patterns, flags);
 	if (ret < 0)
@@ -354,33 +359,38 @@ mailbox_list_ns_prefix_match(struct ns_list_iterate_context *ctx,
 	return ret;
 }
 
-static bool
+static int
 ns_prefix_is_visible(struct ns_list_iterate_context *ctx,
 		     struct mail_namespace *ns)
 {
+	int ret;
+
 	if ((ns->flags & NAMESPACE_FLAG_LIST_PREFIX) != 0)
-		return TRUE;
+		return 1;
 	if ((ns->flags & NAMESPACE_FLAG_LIST_CHILDREN) != 0) {
-		if (mailbox_list_match_anything(ctx, ns, ns->prefix))
-			return TRUE;
+		if ((ret = mailbox_list_match_anything(ctx, ns, ns->prefix)) != 0)
+			return ret;
 	}
-	return FALSE;
+	return 0;
 }
 
-static bool
+static int
 ns_prefix_has_visible_child_namespace(struct ns_list_iterate_context *ctx,
 				      const char *prefix)
 {
 	struct mail_namespace *ns;
 	unsigned int prefix_len = strlen(prefix);
+	int ret;
 
 	for (ns = ctx->namespaces; ns != NULL; ns = ns->next) {
 		if (ns->prefix_len > prefix_len &&
-		    strncmp(ns->prefix, prefix, prefix_len) == 0 &&
-		    ns_prefix_is_visible(ctx, ns))
-			return TRUE;
+		    strncmp(ns->prefix, prefix, prefix_len) == 0) {
+			ret = ns_prefix_is_visible(ctx, ns);
+			if (ret != 0)
+				return ret;
+		}
 	}
-	return FALSE;
+	return 0;
 }
 
 static bool
@@ -410,8 +420,8 @@ mailbox_list_match_anything(struct ns_list_iterate_context *ctx,
 	const char *pattern;
 	int ret;
 
-	if (ns_prefix_has_visible_child_namespace(ctx, prefix))
-		return 1;
+	if ((ret = ns_prefix_has_visible_child_namespace(ctx, prefix)) != 0)
+		return ret;
 
 	pattern = t_strconcat(prefix, "%", NULL);
 	list_iter = mailbox_list_iter_init(ns->list, pattern, list_flags);
@@ -545,6 +555,18 @@ static void inbox_set_children_flags(struct ns_list_iterate_context *ctx)
 		ctx->inbox_info.flags |= MAILBOX_NOCHILDREN;
 }
 
+static void mailbox_list_ns_iter_failed(struct ns_list_iterate_context *ctx)
+{
+	enum mail_error error;
+	const char *errstr;
+
+	if (ctx->cur_ns->list != ctx->error_list) {
+		errstr = mailbox_list_get_last_error(ctx->cur_ns->list, &error);
+		mailbox_list_set_error(ctx->error_list, error, errstr);
+	}
+	ctx->ctx.failed = TRUE;
+}
+
 static bool
 mailbox_list_ns_iter_try_next(struct mailbox_list_iterate_context *_ctx,
 			      const struct mailbox_info **info_r)
@@ -553,8 +575,6 @@ mailbox_list_ns_iter_try_next(struct mailbox_list_iterate_context *_ctx,
 		(struct ns_list_iterate_context *)_ctx;
 	struct mail_namespace *ns;
 	const struct mailbox_info *info;
-	enum mail_error error;
-	const char *errstr;
 	bool has_children;
 
 	if (ctx->cur_ns == NULL) {
@@ -640,12 +660,8 @@ mailbox_list_ns_iter_try_next(struct mailbox_list_iterate_context *_ctx,
 	}
 
 	/* finished with this namespace */
-	if (mailbox_list_iter_deinit(&ctx->backend_ctx) < 0) {
-		errstr = mailbox_list_get_last_error(ctx->cur_ns->list,
-						     &error);
-		mailbox_list_set_error(ctx->error_list, error, errstr);
-		_ctx->failed = TRUE;
-	}
+	if (mailbox_list_iter_deinit(&ctx->backend_ctx) < 0)
+		mailbox_list_ns_iter_failed(ctx);
 	ctx->cur_ns = ctx->cur_ns->next;
 	return FALSE;
 }
@@ -664,17 +680,11 @@ mailbox_list_ns_iter_deinit(struct mailbox_list_iterate_context *_ctx)
 {
 	struct ns_list_iterate_context *ctx =
 		(struct ns_list_iterate_context *)_ctx;
-	enum mail_error error;
-	const char *errstr;
 	int ret;
 
 	if (ctx->backend_ctx != NULL) {
-		if (mailbox_list_iter_deinit(&ctx->backend_ctx) < 0) {
-			errstr = mailbox_list_get_last_error(ctx->cur_ns->list,
-							     &error);
-			mailbox_list_set_error(ctx->error_list, error, errstr);
-			_ctx->failed = TRUE;
-		}
+		if (mailbox_list_iter_deinit(&ctx->backend_ctx) < 0)
+			mailbox_list_ns_iter_failed(ctx);
 	}
 	ret = _ctx->failed ? -1 : 0;
 	pool_unref(&ctx->pool);
@@ -1017,6 +1027,8 @@ mailbox_list_iter_next(struct mailbox_list_iterate_context *ctx)
 {
 	const struct mailbox_info *info;
 
+	if (ctx == &mailbox_list_iter_failed)
+		return NULL;
 	do {
 		T_BEGIN {
 			if (ctx->autocreate_ctx != NULL)
@@ -1034,6 +1046,8 @@ int mailbox_list_iter_deinit(struct mailbox_list_iterate_context **_ctx)
 
 	*_ctx = NULL;
 
+	if (ctx == &mailbox_list_iter_failed)
+		return -1;
 	return ctx->list->v.iter_deinit(ctx);
 }
 

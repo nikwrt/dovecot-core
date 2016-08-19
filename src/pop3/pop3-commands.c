@@ -53,8 +53,8 @@ static const char *get_msgnum(struct client *client, const char *args,
 	num--;
 
 	if (client->deleted) {
-		if (client->deleted_bitmask[num / CHAR_BIT] &
-		    (1 << (num % CHAR_BIT))) {
+		if ((client->deleted_bitmask[num / CHAR_BIT] &
+		     (1 << (num % CHAR_BIT))) != 0) {
 			client_send_line(client, "-ERR Message is deleted.");
 			return NULL;
 		}
@@ -134,8 +134,8 @@ static void cmd_list_callback(struct client *client)
 		}
 
 		if (client->deleted) {
-			if (client->deleted_bitmask[ctx->msgnum / CHAR_BIT] &
-			    (1 << (ctx->msgnum % CHAR_BIT)))
+			if ((client->deleted_bitmask[ctx->msgnum / CHAR_BIT] &
+			     (1 << (ctx->msgnum % CHAR_BIT))) != 0)
 				continue;
 		}
 
@@ -336,7 +336,7 @@ static void fetch_callback(struct client *client)
 	int ret;
 
 	while ((ctx->body_lines > 0 || !ctx->in_body) &&
-	       i_stream_read_data(ctx->stream, &data, &size, 0) > 0) {
+	       i_stream_read_more(ctx->stream, &data, &size) > 0) {
 		if (size > 4096)
 			size = 4096;
 
@@ -438,7 +438,7 @@ static int client_reply_msg_expunged(struct client *client, unsigned int msgnum)
 }
 
 static int fetch(struct client *client, unsigned int msgnum, uoff_t body_lines,
-		 uoff_t *byte_counter)
+		 const char *reason, uoff_t *byte_counter)
 {
         struct fetch_context *ctx;
 	int ret;
@@ -451,7 +451,7 @@ static int fetch(struct client *client, unsigned int msgnum, uoff_t body_lines,
 			       MAIL_FETCH_STREAM_BODY, NULL);
 	mail_set_seq(ctx->mail, msgnum_to_seq(client, msgnum));
 
-	if (mail_get_stream(ctx->mail, NULL, NULL, &ctx->stream) < 0) {
+	if (mail_get_stream_because(ctx->mail, NULL, NULL, reason, &ctx->stream) < 0) {
 		ret = client_reply_msg_expunged(client, msgnum);
 		fetch_deinit(ctx);
 		return ret;
@@ -495,7 +495,7 @@ static int cmd_retr(struct client *client, const char *args)
 		client->last_seen_pop3_msn = msgnum+1;
 
 	client->retr_count++;
-	return fetch(client, msgnum, (uoff_t)-1, &client->retr_bytes);
+	return fetch(client, msgnum, (uoff_t)-1, "RETR", &client->retr_bytes);
 }
 
 static int cmd_rset(struct client *client, const char *args ATTR_UNUSED)
@@ -556,7 +556,7 @@ static int cmd_top(struct client *client, const char *args)
 		return -1;
 
 	client->top_count++;
-	return fetch(client, msgnum, max_lines, &client->top_bytes);
+	return fetch(client, msgnum, max_lines, "TOP", &client->top_bytes);
 }
 
 struct cmd_uidl_context {
@@ -598,7 +598,7 @@ pop3_get_uid(struct client *client, struct mail *mail, string_t *str,
 		return 0;
 	}
 
-	tab = t_malloc(sizeof(static_tab));
+	tab = t_malloc_no0(sizeof(static_tab));
 	memcpy(tab, static_tab, sizeof(static_tab));
 	tab[0].value = t_strdup_printf("%u", client->uid_validity);
 
@@ -656,8 +656,8 @@ list_uidls_saved_iter(struct client *client, struct cmd_uidl_context *ctx)
 		uint32_t msgnum = ctx->msgnum++;
 
 		if (client->deleted) {
-			if (client->deleted_bitmask[msgnum / CHAR_BIT] &
-			    (1 << (msgnum % CHAR_BIT)))
+			if ((client->deleted_bitmask[msgnum / CHAR_BIT] &
+			     (1 << (msgnum % CHAR_BIT))) != 0)
 				continue;
 		}
 		found = TRUE;
@@ -700,8 +700,8 @@ static bool list_uids_iter(struct client *client, struct cmd_uidl_context *ctx)
 			break;
 		}
 		if (client->deleted) {
-			if (client->deleted_bitmask[msgnum / CHAR_BIT] &
-			    (1 << (msgnum % CHAR_BIT)))
+			if ((client->deleted_bitmask[msgnum / CHAR_BIT] &
+			     (1 << (msgnum % CHAR_BIT))) != 0)
 				continue;
 		}
 		found = TRUE;
@@ -814,7 +814,7 @@ static void client_uidls_save(struct client *client)
 		i_assert(mail->seq <= client->highest_seq);
 		seq_uidls[mail->seq-1] = uidl;
 		if (uidl_duplicates_rename)
-			hash_table_insert(prev_uidls, uidl, POINTER_CAST(1));
+			hash_table_update(prev_uidls, uidl, POINTER_CAST(1));
 	}
 	(void)mailbox_search_deinit(&search_ctx);
 	if (uidl_duplicates_rename)

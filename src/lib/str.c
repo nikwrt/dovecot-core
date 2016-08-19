@@ -64,23 +64,13 @@ char *str_free_without_data(string_t **str)
 const char *str_c(string_t *str)
 {
 	str_add_nul(str);
-	return buffer_get_data(str, NULL);
-}
-
-const unsigned char *str_data(const string_t *str)
-{
-	return buffer_get_data(str, NULL);
+	return str->data;
 }
 
 char *str_c_modifiable(string_t *str)
 {
 	str_add_nul(str);
 	return buffer_get_modifiable_data(str, NULL);
-}
-
-size_t str_len(const string_t *str)
-{
-	return buffer_get_used_size(str);
 }
 
 bool str_equals(const string_t *str1, const string_t *str2)
@@ -91,39 +81,17 @@ bool str_equals(const string_t *str1, const string_t *str2)
 	return memcmp(str1->data, str2->data, str1->used) == 0;
 }
 
-void str_append(string_t *str, const char *cstr)
-{
-	buffer_append(str, cstr, strlen(cstr));
-}
-
 void str_append_n(string_t *str, const void *cstr, size_t max_len)
 {
+	const char *p;
 	size_t len;
 
-	len = 0;
-	while (len < max_len && ((const char *)cstr)[len] != '\0')
-		len++;
-
+	p = memchr(cstr, '\0', max_len);
+	if (p == NULL)
+		len = max_len;
+	else
+		len = p - (const char *)cstr;
 	buffer_append(str, cstr, len);
-}
-
-void str_append_data(string_t *str, const void *data, size_t len)
-{
-	buffer_append(str, data, len);
-}
-
-void str_append_c(string_t *str, unsigned char chr)
-{
-	buffer_append_c(str, chr);
-}
-
-void str_append_str(string_t *dest, const string_t *src)
-{
-	const char *cstr;
-	size_t len;
-
-	cstr = buffer_get_data(src, &len);
-	buffer_append(dest, cstr, len);
 }
 
 void str_printfa(string_t *str, const char *fmt, ...)
@@ -153,11 +121,11 @@ void str_vprintfa(string_t *str, const char *fmt, va_list args)
 	init_size += SNPRINTF_INITIAL_EXTRA_SIZE;
 
 	/* @UNSAFE */
-	if (pos+init_size > buffer_get_size(str) &&
-	    pos < buffer_get_size(str)) {
+	if (pos+init_size > buffer_get_writable_size(str) &&
+	    pos < buffer_get_writable_size(str)) {
 		/* avoid growing buffer larger if possible. this is also
 		   required if buffer isn't dynamically growing. */
-		init_size = buffer_get_size(str)-pos;
+		init_size = buffer_get_writable_size(str)-pos;
 	}
 	tmp = buffer_get_space_unsafe(str, pos, init_size);
 	ret = vsnprintf(tmp, init_size, fmt, args);
@@ -174,19 +142,4 @@ void str_vprintfa(string_t *str, const char *fmt, va_list args)
 
 	/* drop the unused data, including terminating NUL */
 	buffer_set_used_size(str, pos + ret);
-}
-
-void str_insert(string_t *str, size_t pos, const char *cstr)
-{
-	buffer_insert(str, pos, cstr, strlen(cstr));
-}
-
-void str_delete(string_t *str, size_t pos, size_t len)
-{
-	buffer_delete(str, pos, len);
-}
-
-void str_truncate(string_t *str, size_t len)
-{
-	buffer_set_used_size(str, len);
 }

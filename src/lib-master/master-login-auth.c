@@ -32,7 +32,7 @@ struct master_login_auth_request {
 	master_login_auth_request_callback_t *callback;
 	void *context;
 
-	unsigned int aborted:1;
+	bool aborted:1;
 };
 
 struct master_login_auth {
@@ -53,9 +53,9 @@ struct master_login_auth {
 
 	pid_t auth_server_pid;
 
-	unsigned int request_auth_token:1;
-	unsigned int version_received:1;
-	unsigned int spid_received:1;
+	bool request_auth_token:1;
+	bool version_received:1;
+	bool spid_received:1;
 };
 
 static void master_login_auth_set_timeout(struct master_login_auth *auth);
@@ -109,8 +109,10 @@ void master_login_auth_disconnect(struct master_login_auth *auth)
 	if (auth->io != NULL)
 		io_remove(&auth->io);
 	if (auth->fd != -1) {
-		i_stream_destroy(&auth->input);
-		o_stream_destroy(&auth->output);
+		if (auth->input != NULL)
+			i_stream_destroy(&auth->input);
+		if (auth->output != NULL)
+			o_stream_destroy(&auth->output);
 
 		net_disconnect(auth->fd);
 		auth->fd = -1;
@@ -389,8 +391,8 @@ master_login_auth_connect(struct master_login_auth *auth)
 		return -1;
 	}
 	auth->fd = fd;
-	auth->input = i_stream_create_fd(fd, AUTH_MAX_INBUF_SIZE, FALSE);
-	auth->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	auth->input = i_stream_create_fd(fd, AUTH_MAX_INBUF_SIZE);
+	auth->output = o_stream_create_fd(fd, (size_t)-1);
 	o_stream_set_no_error_handling(auth->output, TRUE);
 	auth->io = io_add(fd, IO_READ, master_login_auth_input, auth);
 	return 0;

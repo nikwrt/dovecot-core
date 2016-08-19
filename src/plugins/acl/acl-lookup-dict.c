@@ -28,7 +28,7 @@ struct acl_lookup_dict_iter {
 	ARRAY_TYPE(const_string) iter_values;
 	unsigned int iter_idx, iter_value_idx;
 
-	unsigned int failed:1;
+	bool failed:1;
 };
 
 struct acl_lookup_dict *acl_lookup_dict_init(struct mail_user *user)
@@ -41,8 +41,12 @@ struct acl_lookup_dict *acl_lookup_dict_init(struct mail_user *user)
 
 	uri = mail_user_plugin_getenv(user, "acl_shared_dict");
 	if (uri != NULL) {
-		if (dict_init(uri, DICT_DATA_TYPE_STRING, "",
-			      user->set->base_dir, &dict->dict, &error) < 0)
+		struct dict_settings dict_set;
+
+		memset(&dict_set, 0, sizeof(dict_set));
+		dict_set.username = "";
+		dict_set.base_dir = user->set->base_dir;
+		if (dict_init(uri, &dict_set, &dict->dict, &error) < 0)
 			i_error("acl: dict_init(%s) failed: %s", uri, error);
 	} else if (user->mail_debug) {
 		i_debug("acl: No acl_shared_dict setting - "
@@ -151,6 +155,7 @@ acl_lookup_dict_rebuild_update(struct acl_lookup_dict *dict,
 	struct dict_iterate_context *iter;
 	struct dict_transaction_context *dt;
 	const char *prefix, *key, *value, *const *old_ids, *const *new_ids, *p;
+	const char *error;
 	ARRAY_TYPE(const_string) old_ids_arr;
 	unsigned int newi, oldi, old_count, new_count;
 	string_t *path;
@@ -175,8 +180,8 @@ acl_lookup_dict_rebuild_update(struct acl_lookup_dict *dict,
 			array_append(&old_ids_arr, &key, 1);
 		}
 	}
-	if (dict_iterate_deinit(&iter) < 0) {
-		i_error("acl: dict iteration failed, can't update dict");
+	if (dict_iterate_deinit(&iter, &error) < 0) {
+		i_error("acl: dict iteration failed: %s - can't update dict", error);
 		return -1;
 	}
 
@@ -212,8 +217,8 @@ acl_lookup_dict_rebuild_update(struct acl_lookup_dict *dict,
 			oldi++;
 		}
 	}
-	if (dict_transaction_commit(&dt) < 0) {
-		i_error("acl: dict commit failed");
+	if (dict_transaction_commit(&dt, &error) < 0) {
+		i_error("acl: dict commit failed: %s", error);
 		return -1;
 	}
 	return 0;
@@ -260,7 +265,7 @@ int acl_lookup_dict_rebuild(struct acl_lookup_dict *dict)
 static void acl_lookup_dict_iterate_read(struct acl_lookup_dict_iter *iter)
 {
 	struct dict_iterate_context *dict_iter;
-	const char *const *idp, *prefix, *key, *value;
+	const char *const *idp, *prefix, *key, *value, *error;
 	unsigned int prefix_len;
 
 	idp = array_idx(&iter->iter_ids, iter->iter_idx);
@@ -284,8 +289,10 @@ static void acl_lookup_dict_iterate_read(struct acl_lookup_dict_iter *iter)
 		key = p_strdup(iter->iter_value_pool, key + prefix_len);
 		array_append(&iter->iter_values, &key, 1);
 	}
-	if (dict_iterate_deinit(&dict_iter) < 0)
+	if (dict_iterate_deinit(&dict_iter, &error) < 0) {
+		i_error("%s", error);
 		iter->failed = TRUE;
+	}
 }
 
 struct acl_lookup_dict_iter *

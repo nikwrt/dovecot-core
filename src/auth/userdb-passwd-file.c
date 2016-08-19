@@ -13,8 +13,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#define PASSWD_FILE_CACHE_KEY "%u"
-
 struct passwd_file_userdb_iterate_context {
 	struct userdb_iterate_context ctx;
 	struct istream *input;
@@ -141,7 +139,8 @@ static void passwd_file_iterate_next(struct userdb_iterate_context *_ctx)
 			break;
 		}
 		if (line == NULL && ctx->input->stream_errno != 0) {
-			i_error("read(%s) failed: %m", ctx->path);
+			i_error("read(%s) failed: %s", ctx->path,
+				i_stream_get_error(ctx->input));
 			_ctx->failed = TRUE;
 		}
 	}
@@ -191,16 +190,6 @@ passwd_file_preinit(pool_t pool, const char *args)
 	module->pwf = db_passwd_file_init(args, TRUE,
 					  global_auth_settings->debug);
 	module->username_format = format;
-
-	if (!module->pwf->vars)
-		module->module.default_cache_key = PASSWD_FILE_CACHE_KEY;
-	else {
-		module->module.default_cache_key =
-			auth_cache_parse_key(pool,
-					     t_strconcat(PASSWD_FILE_CACHE_KEY,
-						         module->pwf->path,
-							 NULL));
-	}
 	return &module->module;
 }
 

@@ -114,14 +114,12 @@ static int client_output(struct client *client)
 {
 	int ret = 1;
 
-	o_stream_cork(client->output);
 	if (o_stream_flush(client->output) < 0) {
 		client_destroy(&client);
 		return 1;
 	}
 	if (client->cmd_more != NULL)
 		ret = client->cmd_more(client);
-	o_stream_uncork(client->output);
 
 	if (ret > 0) {
 		client->cmd_more = NULL;
@@ -147,8 +145,8 @@ struct client *client_create(int fd)
 	client = i_new(struct client, 1);
 	client->fd = fd;
 	client->io = io_add(fd, IO_READ, client_input, client);
-	client->input = i_stream_create_fd(fd, MAX_INBUF_SIZE, FALSE);
-	client->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	client->input = i_stream_create_fd(fd, MAX_INBUF_SIZE);
+	client->output = o_stream_create_fd(fd, (size_t)-1);
 	o_stream_set_no_error_handling(client->output, TRUE);
 	o_stream_set_flush_callback(client->output, client_output, client);
 	client->cmd_pool = pool_alloconly_create("cmd pool", 1024);

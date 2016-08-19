@@ -5,6 +5,7 @@
 #include "master-service.h"
 #include "master-service-settings.h"
 #include "settings-parser.h"
+#include "dict.h"
 #include "client-connection.h"
 #include "client-connection-private.h"
 #include "doveadm-settings.h"
@@ -22,6 +23,8 @@ const struct doveadm_print_vfuncs *doveadm_print_vfuncs_all[] = {
 
 struct client_connection *doveadm_client;
 int doveadm_exit_code = 0;
+
+static pool_t doveadm_settings_pool;
 
 static void doveadm_die(void)
 {
@@ -65,15 +68,17 @@ static void main_preinit(void)
 static void main_init(void)
 {
 	doveadm_server = TRUE;
+	doveadm_settings_pool = pool_alloconly_create("doveadm settings", 1024);
 	doveadm_settings = master_service_settings_get_others(master_service)[0];
 	doveadm_settings = settings_dup(&doveadm_setting_parser_info,
-					doveadm_settings,
-					pool_datastack_create());
+					doveadm_settings, doveadm_settings_pool);
 
 	doveadm_http_server_init();
 	doveadm_cmds_init();
+	doveadm_register_auth_server_commands();
 	doveadm_dump_init();
 	doveadm_mail_init();
+	dict_drivers_register_builtin();
 	doveadm_load_modules();
 }
 
@@ -84,9 +89,11 @@ static void main_deinit(void)
 	doveadm_mail_deinit();
 	doveadm_dump_deinit();
 	doveadm_unload_modules();
+	dict_drivers_unregister_builtin();
 	doveadm_print_deinit();
 	doveadm_cmds_deinit();
 	doveadm_http_server_deinit();
+	pool_unref(&doveadm_settings_pool);
 }
 
 int main(int argc, char *argv[])
@@ -97,6 +104,8 @@ int main(int argc, char *argv[])
 	};
 	enum master_service_flags service_flags =
 		MASTER_SERVICE_FLAG_KEEP_CONFIG_OPEN;
+	struct master_service_settings_input input;
+	struct master_service_settings_output output;
 	const char *error;
 	int c;
 
@@ -113,8 +122,13 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (master_service_settings_read_simple(master_service, set_roots,
-						&error) < 0)
+	memset(&input, 0, sizeof(input));
+	input.roots = set_roots;
+	input.module = "doveadm";
+	input.service = "doveadm";
+
+	if (master_service_settings_read(master_service, &input, &output,
+					 &error) < 0)
 		i_fatal("Error reading configuration: %s", error);
 
 	master_service_init_log(master_service, "doveadm: ");

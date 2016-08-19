@@ -8,7 +8,7 @@
 #endif
 
 #ifndef FALSE
-#  define FALSE (0)
+#  define FALSE (!1)
 #endif
 
 #ifndef TRUE
@@ -177,8 +177,8 @@
 #endif
 
 #if __GNUC__ > 2
-#  define unlikely(expr) __builtin_expect(!!(expr), 0)
-#  define likely(expr) __builtin_expect(!!(expr), 1)
+#  define unlikely(expr) (__builtin_expect((expr) ? 1 : 0, 0) != 0)
+#  define likely(expr) (__builtin_expect((expr) ? 1 : 0, 1) != 0)
 #else
 #  define unlikely(expr) expr
 #  define likely(expr) expr
@@ -224,6 +224,11 @@
           ((DOVECOT_VERSION_MAJOR << 16) + DOVECOT_VERSION_MINOR >= ((maj) << 16) + (min))
 #else
 #  define DOVECOT_PREREQ(maj, min) 0
+#endif
+
+#ifdef __cplusplus
+#  undef STATIC_ARRAY
+#  define STATIC_ARRAY
 #endif
 
 #endif

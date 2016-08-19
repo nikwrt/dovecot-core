@@ -42,7 +42,7 @@ valid_request_parse_tests[] = {
 		.target_raw = "/",
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_ORIGIN,
-			.url = { .host_name = "example.com" }
+			.url = { .host = { .name = "example.com" } }
 		},
 		.version_major = 1, .version_minor = 1,
 	},{ .request =
@@ -54,7 +54,7 @@ valid_request_parse_tests[] = {
 		.target_raw = "*",
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_ASTERISK,
-			.url = { .host_name = "example.com" }
+			.url = { .host = { .name = "example.com" } }
 		},
 		.version_major = 1, .version_minor = 0,
 	},{ .request =
@@ -65,7 +65,9 @@ valid_request_parse_tests[] = {
 		.target_raw = "example.com:443",
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_AUTHORITY,
-			.url = { .host_name = "example.com", .have_port = TRUE, .port = 443 }
+			.url = {
+				.host = { .name = "example.com" },
+				.port = 443 }
 		},
 		.version_major = 1, .version_minor = 2,
 	},{ .request =
@@ -77,8 +79,8 @@ valid_request_parse_tests[] = {
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_ABSOLUTE,
 			.url = {
-				.host_name = "www.example.com",
-				.have_port = TRUE, .port = 443,
+				.host = { .name = "www.example.com" },
+				.port = 443,
 				.have_ssl = TRUE
 			}
 		},
@@ -93,7 +95,9 @@ valid_request_parse_tests[] = {
 		.target_raw = "http://api.example.com:8080/commit?user=dirk",
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_ABSOLUTE,
-			.url = { .host_name = "api.example.com", .have_port = TRUE, .port = 8080 }
+			.url = {
+				.host = { .name = "api.example.com" },
+				.port = 8080 }
 		},
 		.version_major = 1, .version_minor = 1,
 		.payload = "Content!\r\n"
@@ -106,7 +110,8 @@ valid_request_parse_tests[] = {
 		.target_raw = "http://www.example.com/index.php?seq=1",
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_ABSOLUTE,
-			.url = { .host_name = "www.example.com" }
+			.url = {
+				.host = { .name = "www.example.com" }}
 		},
 		.version_major = 1, .version_minor = 1,
 		.connection_close = TRUE
@@ -118,7 +123,7 @@ valid_request_parse_tests[] = {
 		.target_raw = "http://www.example.com/index.html",
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_ABSOLUTE,
-			.url = { .host_name = "www.example.com" }
+			.url = { .host = { .name = "www.example.com" } }
 		},
 		.version_major = 1, .version_minor = 0,
 		.connection_close = TRUE
@@ -131,7 +136,7 @@ valid_request_parse_tests[] = {
 		.target_raw = "http://www.example.com/index.html",
 		.target = {
 			.format = HTTP_REQUEST_TARGET_FORMAT_ABSOLUTE,
-			.url = { .host_name = "www.example.com" }
+			.url = { .host = { .name = "www.example.com" } }
 		},
 		.version_major = 1, .version_minor = 1,
 		.expect_100_continue = TRUE
@@ -196,7 +201,7 @@ static void test_http_request_parse_valid(void)
 				buffer_set_used_size(payload_buffer, 0);
 				output = o_stream_create_buffer(payload_buffer);
 				test_out("payload receive", 
-					o_stream_send_istream(output, request.payload));
+					o_stream_send_istream(output, request.payload) == OSTREAM_SEND_ISTREAM_RESULT_FINISHED);
 				o_stream_destroy(&output);
 				payload = str_c(payload_buffer);
 			} else {
@@ -229,26 +234,25 @@ static void test_http_request_parse_valid(void)
 			}
 			if (request.target.url == NULL) {
 				test_out("request->target.url = (null)",
-					test->target.url.host_name == NULL && !test->target.url.have_port);
+					test->target.url.host.name == NULL && test->target.url.port == 0);
 			} else {
-				if (request.target.url->host_name == NULL ||
-					test->target.url.host_name == NULL) {
-					test_out(t_strdup_printf("request->target.url->host_name = %s",
-							request.target.url->host_name),
-						request.target.url->host_name == test->target.url.host_name);
+				if (request.target.url->host.name == NULL ||
+					test->target.url.host.name == NULL) {
+					test_out(t_strdup_printf("request->target.url->host.name = %s",
+							request.target.url->host.name),
+						request.target.url->host.name == test->target.url.host.name);
 				} else {
-					test_out(t_strdup_printf("request->target.url->host_name = %s",
-							request.target.url->host_name),
-						strcmp(request.target.url->host_name,
-							test->target.url.host_name) == 0);
+					test_out(t_strdup_printf("request->target.url->host.name = %s",
+							request.target.url->host.name),
+						strcmp(request.target.url->host.name,
+							test->target.url.host.name) == 0);
 				}
-				if (!request.target.url->have_port) {
+				if (request.target.url->port == 0) {
 					test_out("request->target.url->port = (unspecified)",
-						request.target.url->have_port == test->target.url.have_port);
+						request.target.url->port == test->target.url.port);
 				} else {
 					test_out(t_strdup_printf
 						("request->target.url->port = %u", request.target.url->port),
-						request.target.url->have_port == test->target.url.have_port &&
 						request.target.url->port == test->target.url.port);
 				}
 				test_out(t_strdup_printf("request->target.url->have_ssl = %s",

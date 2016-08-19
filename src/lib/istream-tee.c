@@ -17,7 +17,7 @@ struct tee_child_istream {
 	struct tee_istream *tee;
 	struct tee_child_istream *next;
 
-	unsigned int last_read_waiting:1;
+	bool last_read_waiting:1;
 };
 
 static void tee_streams_update_buffer(struct tee_istream *tee)
@@ -101,6 +101,8 @@ static void i_stream_tee_destroy(struct iostream_private *stream)
 	} else {
 		tee_streams_skip(tstream->tee);
 	}
+	/* i_stream_unref() shouldn't unref the parent */
+	tstream->istream.parent = NULL;
 }
 
 static void

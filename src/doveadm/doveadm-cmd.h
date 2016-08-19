@@ -30,7 +30,8 @@ typedef enum {
 
 typedef enum {
 	CMD_FLAG_NONE			= 0x0,
-	CMD_FLAG_HIDDEN			= 0x1
+	CMD_FLAG_HIDDEN			= 0x1,
+	CMD_FLAG_NO_PRINT		= 0x2,
 } doveadm_cmd_flag_t;
 
 struct doveadm_cmd_param {
@@ -76,8 +77,10 @@ struct doveadm_cmd_context {
 
 	const char *username;
 	bool cli;
+	bool tcp_server;
 	struct ip_addr local_ip, remote_ip;
 	in_port_t local_port, remote_port;
+	struct client_connection *conn;
 };
 
 ARRAY_DEFINE_TYPE(doveadm_cmd, struct doveadm_cmd);
@@ -96,9 +99,11 @@ extern struct doveadm_cmd doveadm_cmd_zlibconnect;
 void doveadm_register_cmd(const struct doveadm_cmd *cmd);
 
 const struct doveadm_cmd *
-doveadm_cmd_find_with_args(const char *cmd_name, int *argc, const char **argv[]);
+doveadm_cmd_find_with_args(const char *cmd_name, int *argc,
+			   const char *const *argv[]);
 
 void doveadm_register_auth_commands(void);
+void doveadm_register_auth_server_commands(void);
 void doveadm_register_director_commands(void);
 void doveadm_register_proxy_commands(void);
 void doveadm_register_log_commands(void);
@@ -116,14 +121,15 @@ void doveadm_cmd_ver2_to_mail_cmd_wrapper(struct doveadm_cmd_context *cctx);
 
 void doveadm_cmd_register_ver2(struct doveadm_cmd_ver2 *cmd);
 const struct doveadm_cmd_ver2 *
-doveadm_cmd_find_with_args_ver2(const char *cmd_name, int argc, const char *const argv[]);
+doveadm_cmd_find_with_args_ver2(const char *cmd_name, int *argc,
+				const char *const *argv[]);
 const struct doveadm_cmd_ver2 *doveadm_cmd_find_ver2(const char *cmd_name);
 /* Returns FALSE if cmd_name doesn't exist, TRUE if it exists. */
 bool doveadm_cmd_try_run_ver2(const char *cmd_name,
-	int argc, const char **argv,
+	int argc, const char *const argv[],
 	struct doveadm_cmd_context *cctx);
 /* Returns 0 if success, -1 if parameters were invalid. */
-int doveadm_cmd_run_ver2(int argc, const char **argv,
+int doveadm_cmd_run_ver2(int argc, const char *const argv[],
 	struct doveadm_cmd_context *cctx);
 
 bool doveadm_cmd_param_bool(const struct doveadm_cmd_context *cctx,
@@ -142,6 +148,7 @@ bool doveadm_cmd_param_istream(const struct doveadm_cmd_context *cctx,
 void doveadm_cmd_params_clean(ARRAY_TYPE(doveadm_cmd_param_arr_t) *pargv);
 void doveadm_cmd_params_null_terminate_arrays(ARRAY_TYPE(doveadm_cmd_param_arr_t) *pargv);
 
+extern struct doveadm_cmd_ver2 doveadm_cmd_service_stop_ver2;
 extern struct doveadm_cmd_ver2 doveadm_cmd_stop_ver2;
 extern struct doveadm_cmd_ver2 doveadm_cmd_reload_ver2;
 extern struct doveadm_cmd_ver2 doveadm_cmd_stats_reset_ver2;

@@ -67,7 +67,6 @@ imapc_mail_fetch_callback(const struct imapc_command_reply *reply,
 		imapc_mail_set_failure(mail, reply);
 		if (--mail->fetch_count == 0)
 			mail->fetching_fields = 0;
-		pool_unref(&mail->imail.mail.pool);
 		mbox = (struct imapc_mailbox *)mail->imail.mail.mail.box;
 	}
 	i_assert(mbox != NULL);
@@ -285,7 +284,6 @@ imapc_mail_send_fetch(struct mail *_mail, enum mail_fetch_field fields,
 	str_truncate(str, str_len(str)-1);
 	str_append_c(str, ')');
 
-	pool_ref(mail->imail.mail.pool);
 	mail->fetching_fields |= fields;
 	mail->fetch_count++;
 	mail->fetch_sent = FALSE;
@@ -303,8 +301,7 @@ static void imapc_mail_cache_get(struct imapc_mail *mail,
 
 	if (cache->fd != -1) {
 		mail->fd = cache->fd;
-		mail->imail.data.stream =
-			i_stream_create_fd(mail->fd, 0, FALSE);
+		mail->imail.data.stream = i_stream_create_fd(mail->fd, 0);
 		cache->fd = -1;
 	} else if (cache->buf != NULL) {
 		mail->body = cache->buf;
@@ -417,6 +414,12 @@ int imapc_mail_fetch(struct mail *_mail, enum mail_fetch_field fields,
 		mail_storage_set_error(_mail->box->storage,
 			MAIL_ERROR_NOTPOSSIBLE,
 			"Message GUID not available in this server");
+		return -1;
+	}
+	if (_mail->saving) {
+		mail_storage_set_error(_mail->box->storage,
+			MAIL_ERROR_NOTPOSSIBLE,
+			"Attempting to issue FETCH for a mail not yet committed");
 		return -1;
 	}
 
@@ -604,7 +607,7 @@ imapc_fetch_stream(struct imapc_mail *mail,
 			return;
 		}
 		mail->fd = fd;
-		imail->data.stream = i_stream_create_fd(fd, 0, FALSE);
+		imail->data.stream = i_stream_create_fd(fd, 0);
 	} else {
 		if (!imap_arg_get_nstring(arg, &value))
 			value = NULL;
@@ -686,7 +689,7 @@ imapc_fetch_header_stream(struct imapc_mail *mail,
 	if (args->type == IMAP_ARG_LITERAL_SIZE) {
 		if (!imapc_find_lfile_arg(reply, args, &fd))
 			return;
-		input = i_stream_create_fd(fd, 0, FALSE);
+		input = i_stream_create_fd(fd, 0);
 	} else {
 		if (!imap_arg_get_nstring(args, &value))
 			return;

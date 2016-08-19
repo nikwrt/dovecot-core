@@ -28,7 +28,7 @@
 struct log_client {
 	struct ip_addr ip;
 	char *prefix;
-	unsigned int fatal_logged:1;
+	bool fatal_logged:1;
 };
 
 struct log_connection {
@@ -45,8 +45,8 @@ struct log_connection {
 
 	unsigned int pending_count;
 
-	unsigned int master:1;
-	unsigned int handshaked:1;
+	bool master:1;
+	bool handshaked:1;
 };
 
 static struct log_connection *log_connections = NULL;
@@ -394,7 +394,7 @@ void log_connection_create(struct log_error_buffer *errorbuf,
 	log->fd = fd;
 	log->listen_fd = listen_fd;
 	log->io = io_add(fd, IO_READ, log_connection_input, log);
-	log->input = i_stream_create_fd(fd, PIPE_BUF, FALSE);
+	log->input = i_stream_create_fd(fd, PIPE_BUF);
 	log->default_prefix = i_strdup_printf("listen_fd %d", listen_fd);
 	hash_table_create_direct(&log->clients, default_pool, 0);
 	array_idx_set(&logs_by_fd, listen_fd, &log);

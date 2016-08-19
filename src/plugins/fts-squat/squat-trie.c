@@ -39,7 +39,7 @@ struct squat_trie_build_context {
 	struct dotlock *dotlock;
 
 	uint32_t first_uid;
-	unsigned int compress_nodes:1;
+	bool compress_nodes:1;
 };
 
 struct squat_trie_iterate_node {
@@ -482,6 +482,9 @@ node_read_children(struct squat_trie *trie, struct squat_node *node, int level)
 						   level);
 			children = NODE_CHILDREN_NODES(node);
 		}
+
+		i_assert(children != NULL);
+
 		child = &children[child_idx];
 
 		/* 1) child offset */
@@ -658,7 +661,7 @@ node_split_string(struct squat_trie_build_context *ctx, struct squat_node *node)
 
 	/* make a copy of the leaf string and convert to normal node by
 	   removing it. */
-	str = t_malloc(leafstr_len);
+	str = t_malloc_no0(leafstr_len);
 	if (!NODE_IS_DYNAMIC_LEAF(node))
 		memcpy(str, node->children.static_leaf_string, leafstr_len);
 	else {
@@ -892,7 +895,7 @@ squat_data_normalize(struct squat_trie *trie, const unsigned char *data,
 	unsigned char *dest;
 	unsigned int i;
 
-	dest = t_malloc(size);
+	dest = t_malloc_no0(size);
 	for (i = 0; i < size; i++) {
 		if (data[i] == replacement_utf8[0] && i + 2 < size &&
 		    data[i+1] == replacement_utf8[1] &&
@@ -922,7 +925,7 @@ squat_trie_build_more_real(struct squat_trie_build_context *ctx,
 
 	uid = uid * 2 + (type == SQUAT_INDEX_TYPE_HEADER ? 1 : 0);
 
-	char_lengths = t_malloc(size);
+	char_lengths = t_malloc_no0(size);
 	data = squat_data_normalize(trie, input, size);
 	for (i = 0; i < size; i++) {
 		char_lengths[i] = uni_utf8_char_bytes(input[i]);
@@ -1639,7 +1642,7 @@ static int squat_trie_write(struct squat_trie_build_context *ctx)
 			}
 		}
 
-		output = o_stream_create_fd(fd, 0, FALSE);
+		output = o_stream_create_fd(fd, 0);
 		o_stream_cork(output);
 		o_stream_nsend(output, &trie->hdr, sizeof(trie->hdr));
 	} else {
@@ -1653,7 +1656,7 @@ static int squat_trie_write(struct squat_trie_build_context *ctx)
 			if (squat_trie_write_lock(ctx) < 0)
 				return -1;
 		}
-		output = o_stream_create_fd(trie->fd, 0, FALSE);
+		output = o_stream_create_fd(trie->fd, 0);
 		o_stream_cork(output);
 
 		if (trie->hdr.used_file_size != 0)
@@ -1680,7 +1683,8 @@ static int squat_trie_write(struct squat_trie_build_context *ctx)
 		o_stream_nsend(output, &trie->hdr, sizeof(trie->hdr));
 	}
 	if (o_stream_nfinish(output) < 0) {
-		i_error("write() to %s failed: %m", path);
+		i_error("write(%s) failed: %s", path,
+			o_stream_get_error(output));
 		ret = -1;
 	}
 	o_stream_destroy(&output);

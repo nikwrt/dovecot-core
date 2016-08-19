@@ -120,14 +120,14 @@ create_raw_stream(struct mail_deliver_context *ctx,
 	*mtime_r = (time_t)-1;
 	fd_set_nonblock(fd, FALSE);
 
-	input = i_stream_create_fd(fd, 4096, FALSE);
+	input = i_stream_create_fd(fd, 4096);
 	input->blocking = TRUE;
 	/* If input begins with a From-line, drop it */
-	ret = i_stream_read_data(input, &data, &size, 5);
-	if (ret > 0 && size >= 5 && memcmp(data, "From ", 5) == 0) {
+	ret = i_stream_read_bytes(input, &data, &size, 5);
+	if (ret > 0 && memcmp(data, "From ", 5) == 0) {
 		/* skip until the first LF */
 		i_stream_skip(input, 5);
-		while (i_stream_read_data(input, &data, &size, 0) > 0) {
+		while (i_stream_read_more(input, &data, &size) > 0) {
 			for (i = 0; i < size; i++) {
 				if (data[i] == '\n')
 					break;
@@ -307,7 +307,8 @@ int main(int argc, char *argv[])
 
 	master_service = master_service_init("lda",
 		MASTER_SERVICE_FLAG_STANDALONE |
-		MASTER_SERVICE_FLAG_DONT_LOG_TO_STDERR,
+		MASTER_SERVICE_FLAG_DONT_LOG_TO_STDERR |
+		MASTER_SERVICE_FLAG_NO_INIT_DATASTACK_FRAME,
 		&argc, &argv, "a:d:ef:m:p:r:");
 
 	memset(&ctx, 0, sizeof(ctx));

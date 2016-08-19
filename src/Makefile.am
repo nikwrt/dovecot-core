@@ -1,3 +1,7 @@
+if HAVE_LDAP
+LIB_LDAP=lib-ldap
+endif
+
 LIBDOVECOT_SUBDIRS = \
 	lib-test \
 	lib \
@@ -5,10 +9,11 @@ LIBDOVECOT_SUBDIRS = \
 	lib-auth \
 	lib-master \
 	lib-charset \
+	lib-ssl-iostream \
+	lib-dcrypt \
 	lib-dns \
 	lib-dict \
 	lib-sasl \
-	lib-ssl-iostream \
 	lib-stats \
 	lib-http \
 	lib-fs \
@@ -18,7 +23,9 @@ LIBDOVECOT_SUBDIRS = \
 
 SUBDIRS = \
 	$(LIBDOVECOT_SUBDIRS) \
+	lib-dict-extra \
 	lib-dovecot \
+	$(LIB_LDAP) \
 	lib-fts \
 	lib-imap-client \
 	lib-imap-urlauth \
@@ -51,6 +58,5 @@ SUBDIRS = \
 	replication \
 	util \
 	doveadm \
-	ssl-params \
 	stats \
 	plugins

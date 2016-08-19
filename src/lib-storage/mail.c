@@ -247,21 +247,13 @@ void mail_set_aborted(struct mail *mail)
 int mail_get_stream(struct mail *mail, struct message_size *hdr_size,
 		    struct message_size *body_size, struct istream **stream_r)
 {
-	struct mail_private *p = (struct mail_private *)mail;
-	int ret;
-
-	if (mail->lookup_abort != MAIL_LOOKUP_ABORT_NEVER) {
-		mail_set_aborted(mail);
-		return -1;
-	}
-	T_BEGIN {
-		ret = p->v.get_stream(mail, TRUE, hdr_size, body_size, stream_r);
-	} T_END;
-	return ret;
+	return mail_get_stream_because(mail, hdr_size, body_size,
+				       "mail stream", stream_r);
 }
 
-int mail_get_hdr_stream(struct mail *mail, struct message_size *hdr_size,
-			struct istream **stream_r)
+int mail_get_stream_because(struct mail *mail, struct message_size *hdr_size,
+			    struct message_size *body_size,
+			    const char *reason, struct istream **stream_r)
 {
 	struct mail_private *p = (struct mail_private *)mail;
 	int ret;
@@ -271,7 +263,34 @@ int mail_get_hdr_stream(struct mail *mail, struct message_size *hdr_size,
 		return -1;
 	}
 	T_BEGIN {
+		p->get_stream_reason = reason;
+		ret = p->v.get_stream(mail, TRUE, hdr_size, body_size, stream_r);
+		p->get_stream_reason = "";
+	} T_END;
+	return ret;
+}
+
+int mail_get_hdr_stream(struct mail *mail, struct message_size *hdr_size,
+			struct istream **stream_r)
+{
+	return mail_get_hdr_stream_because(mail, hdr_size, "header stream", stream_r);
+}
+
+int mail_get_hdr_stream_because(struct mail *mail,
+				struct message_size *hdr_size,
+				const char *reason, struct istream **stream_r)
+{
+	struct mail_private *p = (struct mail_private *)mail;
+	int ret;
+
+	if (mail->lookup_abort != MAIL_LOOKUP_ABORT_NEVER) {
+		mail_set_aborted(mail);
+		return -1;
+	}
+	T_BEGIN {
+		p->get_stream_reason = reason;
 		ret = p->v.get_stream(mail, FALSE, hdr_size, NULL, stream_r);
+		p->get_stream_reason = "";
 	} T_END;
 	return ret;
 }
@@ -402,24 +421,12 @@ void mail_precache(struct mail *mail)
 	} T_END;
 }
 
-void mail_set_cache_corrupted(struct mail *mail, enum mail_fetch_field field)
-{
-	mail_set_cache_corrupted_reason(mail, field, "");
-}
-
-void mail_set_cache_corrupted_reason(struct mail *mail,
-				     enum mail_fetch_field field,
-				     const char *reason)
+void mail_set_cache_corrupted(struct mail *mail,
+			      enum mail_fetch_field field,
+			      const char *reason)
 {
 	struct mail_private *p = (struct mail_private *)mail;
-
-	/* FIXME: v2.3: rename set_cache_corrupted_reason() to just
-	   set_cache_corrupted(). we have two here for backwards API
-	   compatibility. */
-	if (p->v.set_cache_corrupted_reason != NULL)
-		p->v.set_cache_corrupted_reason(mail, field, reason);
-	else
-		p->v.set_cache_corrupted(mail, field);
+	p->v.set_cache_corrupted(mail, field, reason);
 }
 
 void mail_generate_guid_128_hash(const char *guid, guid_128_t guid_128_r)

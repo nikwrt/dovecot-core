@@ -100,7 +100,7 @@ struct sql_db {
 	unsigned int connect_failure_count;
 	struct timeout *to_reconnect;
 
-	unsigned int no_reconnect:1;
+	bool no_reconnect:1;
 };
 
 struct sql_result_vfuncs {
@@ -141,10 +141,11 @@ struct sql_result {
 	struct sql_field_map *map;
 	void *fetch_dest;
 	size_t fetch_dest_size;
+	enum sql_result_error_type error_type;
 
-	unsigned int failed:1;
-	unsigned int failed_try_retry:1;
-	unsigned int callback:1;
+	bool failed:1;
+	bool failed_try_retry:1;
+	bool callback:1;
 };
 
 struct sql_transaction_context {

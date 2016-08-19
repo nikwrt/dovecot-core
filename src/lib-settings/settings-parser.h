@@ -22,6 +22,7 @@ enum setting_type {
 	SET_UINT,
 	SET_UINT_OCT,
 	SET_TIME,
+	SET_TIME_MSECS,
 	SET_SIZE,
 	SET_IN_PORT, /* internet port */
 	SET_STR,
@@ -59,6 +60,10 @@ struct setting_define {
 	  #name, offsetof(struct struct_name, name), NULL }
 #define SETTING_DEFINE_STRUCT_TIME(name, struct_name) \
 	{ SET_TIME + COMPILE_ERROR_IF_TYPES_NOT_COMPATIBLE( \
+		((struct struct_name *)0)->name, unsigned int), \
+	  #name, offsetof(struct struct_name, name), NULL }
+#define SETTING_DEFINE_STRUCT_TIME_MSECS(name, struct_name) \
+	{ SET_TIME_MSECS + COMPILE_ERROR_IF_TYPES_NOT_COMPATIBLE( \
 		((struct struct_name *)0)->name, unsigned int), \
 	  #name, offsetof(struct struct_name, name), NULL }
 #define SETTING_DEFINE_STRUCT_STR(name, struct_name) \
@@ -233,6 +238,9 @@ const char *settings_section_escape(const char *name);
 /* Parse time interval string, return as seconds. */
 int settings_get_time(const char *str, unsigned int *secs_r,
 		      const char **error_r);
+/* Parse time interval string, return as milliseconds. */
+int settings_get_time_msecs(const char *str, unsigned int *msecs_r,
+			    const char **error_r);
 /* Parse size string, return as bytes. */
 int settings_get_size(const char *str, uoff_t *bytes_r,
 		      const char **error_r);

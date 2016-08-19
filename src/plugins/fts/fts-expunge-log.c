@@ -401,7 +401,7 @@ fts_expunge_log_read_begin(struct fts_expunge_log *log)
 	if (fts_expunge_log_reopen_if_needed(log, FALSE) < 0)
 		ctx->failed = TRUE;
 	else if (log->fd != -1)
-		ctx->input = i_stream_create_fd(log->fd, (size_t)-1, FALSE);
+		ctx->input = i_stream_create_fd(log->fd, (size_t)-1);
 	ctx->unlink = TRUE;
 	return ctx;
 }
@@ -424,7 +424,8 @@ fts_expunge_log_read_failure(struct fts_expunge_log_read_ctx *ctx,
 
 	if (ctx->input->stream_errno != 0) {
 		ctx->failed = TRUE;
-		i_error("read(%s) failed: %m", ctx->log->path);
+		i_error("read(%s) failed: %s", ctx->log->path,
+			i_stream_get_error(ctx->input));
 	} else {
 		size = i_stream_get_data_size(ctx->input);
 		ctx->corrupted = TRUE;
@@ -447,7 +448,7 @@ fts_expunge_log_read_next(struct fts_expunge_log_read_ctx *ctx)
 		return NULL;
 
 	/* initial read to try to get the record */
-	(void)i_stream_read_data(ctx->input, &data, &size, IO_BLOCK_SIZE);
+	(void)i_stream_read_bytes(ctx->input, &data, &size, IO_BLOCK_SIZE);
 	if (size == 0 && ctx->input->stream_errno == 0) {
 		/* expected EOF - mark the file as read by unlinking it */
 		if (ctx->unlink)
@@ -455,8 +456,8 @@ fts_expunge_log_read_next(struct fts_expunge_log_read_ctx *ctx)
 
 		/* try reading again, in case something new was written */
 		i_stream_sync(ctx->input);
-		(void)i_stream_read_data(ctx->input, &data, &size,
-					 IO_BLOCK_SIZE);
+		(void)i_stream_read_bytes(ctx->input, &data, &size,
+					  IO_BLOCK_SIZE);
 	}
 	if (size < sizeof(*rec)) {
 		if (size == 0 && ctx->input->stream_errno == 0) {
@@ -478,8 +479,7 @@ fts_expunge_log_read_next(struct fts_expunge_log_read_ctx *ctx)
 
 	/* read the entire record */
 	while (size < rec->record_size) {
-		if (i_stream_read_data(ctx->input, &data, &size,
-				       rec->record_size-1) < 0) {
+		if (i_stream_read_bytes(ctx->input, &data, &size, rec->record_size) < 0) {
 			fts_expunge_log_read_failure(ctx, rec->record_size);
 			return NULL;
 		}

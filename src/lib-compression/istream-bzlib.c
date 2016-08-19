@@ -18,9 +18,9 @@ struct bzlib_istream {
 	size_t high_pos;
 	struct stat last_parent_statbuf;
 
-	unsigned int log_errors:1;
-	unsigned int marked:1;
-	unsigned int zs_closed:1;
+	bool log_errors:1;
+	bool marked:1;
+	bool zs_closed:1;
 };
 
 static void i_stream_bzlib_close(struct iostream_private *stream,
@@ -41,8 +41,7 @@ static void bzlib_read_error(struct bzlib_istream *zstream, const char *error)
 	io_stream_set_error(&zstream->istream.iostream,
 			    "bzlib.read(%s): %s at %"PRIuUOFF_T,
 			    i_stream_get_name(&zstream->istream.istream), error,
-			    zstream->istream.abs_start_offset +
-			    zstream->istream.istream.v_offset);
+			    i_stream_get_absolute_offset(&zstream->istream.istream));
 	if (zstream->log_errors)
 		i_error("%s", zstream->istream.iostream.error);
 }
@@ -86,8 +85,7 @@ static ssize_t i_stream_bzlib_read(struct istream_private *stream)
 			   have a seek mark. */
 			i_stream_compress(stream);
 		}
-		if (stream->max_buffer_size == 0 ||
-		    stream->buffer_size < stream->max_buffer_size)
+		if (stream->buffer_size < i_stream_get_max_buffer_size(&stream->istream))
 			i_stream_grow_buffer(stream, CHUNK_SIZE);
 
 		if (stream->pos == stream->buffer_size) {
@@ -101,7 +99,7 @@ static ssize_t i_stream_bzlib_read(struct istream_private *stream)
 		}
 	}
 
-	if (i_stream_read_data(stream->parent, &data, &size, 0) < 0) {
+	if (i_stream_read_more(stream->parent, &data, &size) < 0) {
 		if (stream->parent->stream_errno != 0) {
 			stream->istream.stream_errno =
 				stream->parent->stream_errno;

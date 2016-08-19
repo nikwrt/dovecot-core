@@ -48,7 +48,7 @@ struct mail_index_strmap_view {
 	uint32_t next_str_idx;
 	uint32_t lost_expunged_uid;
 
-	unsigned int desynced:1;
+	bool desynced:1;
 };
 
 struct mail_index_strmap_read_context {
@@ -65,7 +65,7 @@ struct mail_index_strmap_read_context {
 	uint32_t next_ref_index;
 	unsigned int rec_size;
 
-	unsigned int too_large_uids:1;
+	bool too_large_uids:1;
 };
 
 struct mail_index_strmap_view_sync {
@@ -266,8 +266,8 @@ static int mail_index_strmap_open(struct mail_index_strmap_view *view)
 		mail_index_strmap_set_syscall_error(strmap, "open()");
 		return -1;
 	}
-	strmap->input = i_stream_create_fd(strmap->fd, (size_t)-1, FALSE);
-	ret = i_stream_read_data(strmap->input, &data, &size, sizeof(hdr)-1);
+	strmap->input = i_stream_create_fd(strmap->fd, (size_t)-1);
+	ret = i_stream_read_bytes(strmap->input, &data, &size, sizeof(hdr));
 	if (ret <= 0) {
 		if (ret < 0) {
 			mail_index_strmap_set_syscall_error(strmap, "read()");
@@ -360,7 +360,7 @@ mail_index_strmap_read_packed(struct mail_index_strmap_read_context *ctx,
 	size_t size;
 	int ret;
 
-	ret = i_stream_read_data(ctx->input, &data, &size, sizeof(*num_r) - 1);
+	ret = i_stream_read_bytes(ctx->input, &data, &size, sizeof(*num_r));
 	if (ret <= 0)
 		return ret;
 
@@ -435,8 +435,7 @@ mail_index_strmap_read_rec_first(struct mail_index_strmap_read_context *ctx,
 	ret = mail_index_strmap_uid_exists(ctx, ctx->rec.uid);
 	if (ret < 0)
 		return -1;
-	if (i_stream_read_data(ctx->view->strmap->input, &ctx->data, &size,
-			       ctx->rec_size - 1) <= 0)
+	if (i_stream_read_bytes(ctx->view->strmap->input, &ctx->data, &size, ctx->rec_size) <= 0)
 		return -1;
 	ctx->str_idx_base = ctx->data + count * sizeof(uint32_t);
 
@@ -509,8 +508,8 @@ strmap_read_block_init(struct mail_index_strmap_view *view,
 	}
 
 	memset(ctx, 0, sizeof(*ctx));
-	ret = i_stream_read_data(strmap->input, &data, &size,
-				 sizeof(block_size)-1);
+	ret = i_stream_read_bytes(strmap->input, &data, &size,
+				  sizeof(block_size));
 	if (ret <= 0) {
 		if (strmap->input->stream_errno == 0) {
 			/* no new data */
@@ -959,7 +958,7 @@ static void mail_index_strmap_write_block(struct mail_index_strmap_view *view,
 	o_stream_nsend(output, &block_size, sizeof(block_size));
 	(void)o_stream_seek(output, end_offset);
 
-	if (output->last_failed_errno != 0)
+	if (output->stream_errno != 0)
 		return;
 
 	i_assert(view->last_added_uid == recs[count-1].uid);
@@ -1014,12 +1013,12 @@ static int mail_index_strmap_recreate(struct mail_index_strmap_view *view)
 				     temp_path);
 		return -1;
 	}
-	output = o_stream_create_fd(fd, 0, FALSE);
+	output = o_stream_create_fd(fd, 0);
 	o_stream_cork(output);
 	mail_index_strmap_recreate_write(view, output);
 	if (o_stream_nfinish(output) < 0) {
-		mail_index_set_error(strmap->index,
-				     "write(%s) failed: %m", temp_path);
+		mail_index_set_error(strmap->index, "write(%s) failed: %s",
+				     temp_path, o_stream_get_error(output));
 		ret = -1;
 	}
 	o_stream_destroy(&output);
@@ -1168,7 +1167,7 @@ mail_index_strmap_write_append(struct mail_index_strmap_view *view)
 	i_assert(old_recs[i].uid > view->last_read_uid);
 
 	/* write the new records */
-	output = o_stream_create_fd(view->strmap->fd, 0, FALSE);
+	output = o_stream_create_fd(view->strmap->fd, 0);
 	(void)o_stream_seek(output, view->last_read_block_offset);
 	o_stream_cork(output);
 	mail_index_strmap_write_block(view, output, i,

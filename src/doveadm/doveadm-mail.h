@@ -92,13 +92,15 @@ struct doveadm_mail_cmd_context {
 	int exit_code;
 
 	/* This command is being called by a remote doveadm client. */
-	unsigned int proxying:1;
+	bool proxying:1;
 	/* We're handling only a single user */
-	unsigned int iterate_single_user:1;
+	bool iterate_single_user:1;
 	/* We're going through all users (not set for wildcard usernames) */
-	unsigned int iterate_all_users:1;
+	bool iterate_all_users:1;
+	/* Add username header to all replies */
+	bool add_username_header:1;
 	/* Running from CLI doveadm (not doveadm-server) */
-	unsigned int cli:1;
+	bool cli:1;
 };
 
 struct doveadm_mail_cmd {
@@ -197,6 +199,7 @@ extern struct doveadm_cmd_ver2 doveadm_cmd_import_ver2;
 extern struct doveadm_cmd_ver2 doveadm_cmd_search_ver2;
 extern struct doveadm_cmd_ver2 doveadm_cmd_copy_ver2;
 extern struct doveadm_cmd_ver2 doveadm_cmd_move_ver2;
+extern struct doveadm_cmd_ver2 doveadm_cmd_mailbox_update_ver2;
 
 #define DOVEADM_CMD_MAIL_COMMON \
 DOVEADM_CMD_PARAM('A', "all-users", CMD_PARAM_BOOL, 0) \

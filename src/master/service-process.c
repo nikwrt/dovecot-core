@@ -133,7 +133,7 @@ service_dup_fds(struct service *service)
 	}
 	dup2_append(&dups, service->status_fd[1], MASTER_STATUS_FD);
 	if (service->type != SERVICE_TYPE_ANVIL) {
-		dup2_append(&dups, service->list->master_dead_pipe_fd[1],
+		dup2_append(&dups, service->master_dead_pipe_fd[1],
 			    MASTER_DEAD_FD);
 	} else {
 		dup2_append(&dups, global_master_dead_pipe_fd[1],
@@ -439,7 +439,7 @@ log_coredump(struct service *service, string_t *str, int status)
 #ifdef WCOREDUMP
 	int signum = WTERMSIG(status);
 
-	if (WCOREDUMP(status)) {
+	if (WCOREDUMP(status) != 0) {
 		str_append(str, " (core dumped)");
 		return;
 	}

@@ -11,8 +11,8 @@ struct mail_istream {
 
 	struct mail *mail;
 	uoff_t expected_size;
-	unsigned int files_read_increased:1;
-	unsigned int input_has_body:1;
+	bool files_read_increased:1;
+	bool input_has_body:1;
 };
 
 static bool i_stream_mail_try_get_cached_size(struct mail_istream *mstream)
@@ -80,7 +80,7 @@ i_stream_mail_set_size_corrupted(struct mail_istream *mstream, size_t size)
 		mstream->expected_size, chr, cur_size,
 		mailbox_get_vname(mstream->mail->box),
 		mstream->mail->uid, mail_id);
-	mail_set_cache_corrupted_reason(mstream->mail, MAIL_FETCH_PHYSICAL_SIZE,
+	mail_set_cache_corrupted(mstream->mail, MAIL_FETCH_PHYSICAL_SIZE,
 		t_strdup_printf("read(%s) failed: %s",
 				i_stream_get_name(&mstream->istream.istream),
 				mstream->istream.iostream.error));

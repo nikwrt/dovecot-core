@@ -34,7 +34,7 @@ get_var_expand_table(struct mail *mail, const char *reason,
 	struct var_expand_table *tab;
 	const char *subject;
 
-	tab = t_malloc(sizeof(static_tab));
+	tab = t_malloc_no0(sizeof(static_tab));
 	memcpy(tab, static_tab, sizeof(static_tab));
 
 	tab[0].value = "\r\n";
@@ -170,10 +170,8 @@ int mail_send_rejection(struct mail_deliver_context *ctx, const char *recipient,
 			N_ELEMENTS(exclude_headers),
 			*null_header_filter_callback, (void *)NULL);
 
-	    ret = o_stream_send_istream(output, input);
+	    o_stream_nsend_istream(output, input);
 	    i_stream_unref(&input);
-
-	    i_assert(ret != 0);
     }
 
     str_truncate(str, 0);

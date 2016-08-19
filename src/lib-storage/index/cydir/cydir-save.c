@@ -31,8 +31,8 @@ struct cydir_save_context {
 	struct mail *mail;
 	int fd;
 
-	unsigned int failed:1;
-	unsigned int finished:1;
+	bool failed:1;
+	bool finished:1;
 };
 
 static char *cydir_generate_tmp_filename(void)
@@ -91,6 +91,7 @@ int cydir_save_begin(struct mail_save_context *_ctx, struct istream *input)
 		if (ctx->fd != -1) {
 			_ctx->data.output =
 				o_stream_create_fd_file(ctx->fd, 0, FALSE);
+			o_stream_set_name(_ctx->data.output, path);
 			o_stream_cork(_ctx->data.output);
 		} else {
 			mail_storage_set_critical(trans->box->storage,
@@ -131,27 +132,15 @@ int cydir_save_begin(struct mail_save_context *_ctx, struct istream *input)
 int cydir_save_continue(struct mail_save_context *_ctx)
 {
 	struct cydir_save_context *ctx = (struct cydir_save_context *)_ctx;
-	struct mail_storage *storage = &ctx->mbox->storage->storage;
 
 	if (ctx->failed)
 		return -1;
 
-	do {
-		if (o_stream_send_istream(_ctx->data.output, ctx->input) < 0) {
-			if (!mail_storage_set_error_from_errno(storage)) {
-				mail_storage_set_critical(storage,
-					"write(%s) failed: %m",
-					cydir_get_save_path(ctx, ctx->mail_count));
-			}
-			ctx->failed = TRUE;
-			return -1;
-		}
-		index_mail_cache_parse_continue(_ctx->dest_mail);
-
-		/* both tee input readers may consume data from our primary
-		   input stream. we'll have to make sure we don't return with
-		   one of the streams still having data in them. */
-	} while (i_stream_read(ctx->input) > 0);
+	if (index_storage_save_continue(_ctx, ctx->input,
+					_ctx->dest_mail) < 0) {
+		ctx->failed = TRUE;
+		return -1;
+	}
 	return 0;
 }
 
@@ -162,7 +151,8 @@ static int cydir_save_flush(struct cydir_save_context *ctx, const char *path)
 	int ret = 0;
 
 	if (o_stream_nfinish(ctx->ctx.data.output) < 0) {
-		mail_storage_set_critical(storage, "write(%s) failed: %m", path);
+		mail_storage_set_critical(storage, "write(%s) failed: %s", path,
+			o_stream_get_error(ctx->ctx.data.output));
 		ret = -1;
 	}
 
@@ -274,7 +264,7 @@ int cydir_transaction_save_commit_pre(struct mail_save_context *_ctx)
 	dest_prefixlen = str_len(dest_path);
 
 	seq_range_array_iter_init(&iter, &_t->changes->saved_uids); n = 0;
-	while (seq_range_array_iter_nth(&iter, n++, &uid) > 0) {
+	while (seq_range_array_iter_nth(&iter, n++, &uid)) {
 		str_truncate(src_path, src_prefixlen);
 		str_truncate(dest_path, dest_prefixlen);
 		str_printfa(src_path, "%u", n-1);

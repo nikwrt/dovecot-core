@@ -43,7 +43,6 @@ virtual_search_args_parse(const string_t *rule, const char **error_r)
 	struct mail_search_parser *parser;
 	struct mail_search_args *sargs;
 	const char *charset = "UTF-8";
-	bool fatal;
 	int ret;
 
 	if (str_len(rule) == 0) {
@@ -59,7 +58,7 @@ virtual_search_args_parse(const string_t *rule, const char **error_r)
 	ret = imap_parser_finish_line(imap_parser, 0,  0, &args);
 	if (ret < 0) {
 		sargs = NULL;
-		*error_r = t_strdup(imap_parser_get_error(imap_parser, &fatal));
+		*error_r = t_strdup(imap_parser_get_error(imap_parser, NULL));
 	} else {
 		parser = mail_search_parser_init_imap(args);
 		if (mail_search_build(mail_search_register_get_imap(),
@@ -348,13 +347,11 @@ static int virtual_config_box_metadata_match(struct mailbox *box,
 
 	imtrans = imap_metadata_transaction_begin(box);
 	ret = imap_metadata_get(imtrans, bbox->metadata_entry, &value);
-	if (ret < 0) {
+	if (ret < 0)
 		*error_r = t_strdup(imap_metadata_transaction_get_last_error(imtrans, NULL));
-		return -1;
-	}
 	if (ret > 0)
 		ret = wildcard_match(value.value, bbox->metadata_value) ? 1 : 0;
-	if (bbox->negative_match)
+	if (ret >= 0 && bbox->negative_match)
 		ret = ret > 0 ? 0 : 1;
 	(void)imap_metadata_transaction_commit(&imtrans, NULL, NULL);
 	return ret;
@@ -445,7 +442,7 @@ static int virtual_config_expand_wildcards(struct virtual_parse_context *ctx,
 		*error_r = mailbox_list_get_last_error(user->namespaces->list, NULL);
 		return -1;
 	}
-	return 0;
+	return ret < 0 ? -1 : 0;
 }
 
 static void virtual_config_search_args_dup(struct virtual_mailbox *mbox)
@@ -498,7 +495,7 @@ int virtual_config_read(struct virtual_mailbox *mbox)
 	ctx.mbox = mbox;
 	ctx.pool = mbox->box.pool;
 	ctx.rule = t_str_new(256);
-	ctx.input = i_stream_create_fd(fd, (size_t)-1, FALSE);
+	ctx.input = i_stream_create_fd(fd, (size_t)-1);
 	i_stream_set_return_partial_line(ctx.input, TRUE);
 	while ((line = i_stream_read_next_line(ctx.input)) != NULL) {
 		linenum++;

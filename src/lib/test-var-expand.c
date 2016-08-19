@@ -52,7 +52,10 @@ static void test_var_expand_builtin(void)
 		{ "%50Hv", "1f" },
 		{ "%50Hw", "2e" },
 		{ "%50Nv", "25" },
-		{ "%50Nw", "e" }
+		{ "%50Nw", "e" },
+
+		{ "%{nonexistent}", "UNSUPPORTED_VARIABLE_nonexistent" },
+		{ "%{nonexistent:default}", "UNSUPPORTED_VARIABLE_nonexistent" },
 	};
 	static struct var_expand_table table[] = {
 		{ 'v', "value", NULL },
@@ -148,10 +151,57 @@ static void test_var_expand_with_funcs(void)
 	test_end();
 }
 
+static void test_var_get_key(void)
+{
+	static struct {
+		const char *str;
+		char key;
+	} tests[] = {
+		{ "x", 'x' },
+		{ "2.5Mx", 'x' },
+		{ "200MDx", 'x' },
+		{ "200MD{foo}", '{' },
+		{ "{foo}", '{' },
+		{ "", '\0' },
+	};
+
+	test_begin("var_get_key");
+	for (unsigned int i = 0; i < N_ELEMENTS(tests); i++)
+		test_assert_idx(var_get_key(tests[i].str) == tests[i].key, i);
+	test_end();
+}
+
+static void test_var_has_key(void)
+{
+	static struct {
+		const char *str;
+		char key;
+		const char *long_key;
+		bool result;
+	} tests[] = {
+		{ "%x%y", 'x', NULL, TRUE },
+		{ "%x%y", 'y', NULL, TRUE },
+		{ "%x%y", 'z', NULL, FALSE },
+		{ "%{foo}", 'f', NULL, FALSE },
+		{ "%{foo}", 'o', NULL, FALSE },
+		{ "%{foo}", '\0', "foo", TRUE },
+		{ "%{foo}", 'o', "foo", TRUE },
+		{ "%2.5Mx%y", 'x', NULL, TRUE },
+		{ "%2.5M{foo}", '\0', "foo", TRUE },
+	};
+
+	test_begin("var_has_key");
+	for (unsigned int i = 0; i < N_ELEMENTS(tests); i++)
+		test_assert_idx(var_has_key(tests[i].str, tests[i].key, tests[i].long_key) == tests[i].result, i);
+	test_end();
+}
+
 void test_var_expand(void)
 {
 	test_var_expand_ranges();
 	test_var_expand_builtin();
 	test_var_get_key_range();
 	test_var_expand_with_funcs();
+	test_var_get_key();
+	test_var_has_key();
 }

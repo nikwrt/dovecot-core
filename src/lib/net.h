@@ -23,9 +23,7 @@
 struct ip_addr {
 	unsigned short family;
 	union {
-#ifdef HAVE_IPV6
 		struct in6_addr ip6;
-#endif
 		struct in_addr ip4;
 	} u;
 };
@@ -38,18 +36,7 @@ struct net_unix_cred {
 };
 
 /* maxmimum string length of IP address */
-#ifdef HAVE_IPV6
-#  define MAX_IP_LEN INET6_ADDRSTRLEN
-#else
-#  define MAX_IP_LEN 20
-#endif
-
-#ifndef HAVE_IPV6
-#  undef EAI_NONAME
-#  define EAI_NONAME NO_ADDRESS
-#  undef EAI_FAIL
-#  define EAI_FAIL NO_RECOVERY
-#endif
+#define MAX_IP_LEN INET6_ADDRSTRLEN
 
 #define IPADDR_IS_V4(ip) ((ip)->family == AF_INET)
 #define IPADDR_IS_V6(ip) ((ip)->family == AF_INET6)
@@ -60,6 +47,14 @@ enum net_listen_flags {
 	   cleared on return. */
 	NET_LISTEN_FLAG_REUSEPORT	= 0x01
 };
+
+/* INADDR_ANY for IPv4 or IPv6. The IPv6 any address may
+   include IPv4 depending on the system (Linux yes, BSD no). */
+extern const struct ip_addr net_ip4_any;
+extern const struct ip_addr net_ip6_any;
+
+extern const struct ip_addr net_ip4_loopback;
+extern const struct ip_addr net_ip6_loopback;
 
 /* Returns TRUE if IPs are the same */
 bool net_ip_compare(const struct ip_addr *ip1, const struct ip_addr *ip2);
@@ -92,11 +87,12 @@ void net_set_nonblock(int fd, bool nonblock);
 /* Set TCP_CORK if supported, ie. don't send out partial frames.
    Returns 0 if ok, -1 if failed. */
 int net_set_cork(int fd, bool cork) ATTR_NOWARN_UNUSED_RESULT;
+/* Set TCP_NODELAY, which disables the Nagle algorithm. */
+int net_set_tcp_nodelay(int fd, bool nodelay);
 
-/* Set IP to contain INADDR_ANY for IPv4 or IPv6. The IPv6 any address may
-   include IPv4 depending on the system (Linux yes, BSD no). */
-void net_get_ip_any4(struct ip_addr *ip);
-void net_get_ip_any6(struct ip_addr *ip);
+/* Set socket kernel buffer sizes */
+int net_set_send_buffer_size(int fd, size_t size);
+int net_set_recv_buffer_size(int fd, size_t size);
 
 /* Listen for connections on a socket */
 int net_listen(const struct ip_addr *my_ip, in_port_t *port, int backlog);

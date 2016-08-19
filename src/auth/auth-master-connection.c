@@ -132,7 +132,7 @@ master_input_request(struct auth_master_connection *conn, const char *args)
 	return TRUE;
 }
 
-static int
+static bool
 master_input_cache_flush(struct auth_master_connection *conn, const char *args)
 {
 	const char *const *list;
@@ -341,6 +341,7 @@ static void pass_callback_finish(struct auth_request *auth_request,
 	case PASSDB_RESULT_PASS_EXPIRED:
 		str_printfa(str, "NOTFOUND\t%u", auth_request->id);
 		break;
+	case PASSDB_RESULT_NEXT:
 	case PASSDB_RESULT_PASSWORD_MISMATCH:
 	case PASSDB_RESULT_INTERNAL_FAILURE:
 		str_printfa(str, "FAIL\t%u", auth_request->id);
@@ -747,8 +748,8 @@ auth_master_connection_create(struct auth *auth, int fd,
 	conn->fd = fd;
 	conn->path = i_strdup(path);
 	conn->auth = auth;
-	conn->input = i_stream_create_fd(fd, MAX_INBUF_SIZE, FALSE);
-	conn->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	conn->input = i_stream_create_fd(fd, MAX_INBUF_SIZE);
+	conn->output = o_stream_create_fd(fd, (size_t)-1);
 	o_stream_set_no_error_handling(conn->output, TRUE);
 	o_stream_set_flush_callback(conn->output, master_output, conn);
 	conn->io = io_add(fd, IO_READ, master_input, conn);

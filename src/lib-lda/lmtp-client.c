@@ -33,8 +33,8 @@ struct lmtp_rcpt {
 
 	struct lmtp_recipient_params params;
 
-	unsigned int data_called:1;
-	unsigned int failed:1;
+	bool data_called:1;
+	bool failed:1;
 };
 
 struct lmtp_client {
@@ -73,12 +73,12 @@ struct lmtp_client {
 	unsigned char output_last;
 	struct lmtp_client_times times;
 
-	unsigned int running:1;
-	unsigned int xclient_sent:1;
-	unsigned int rcpt_to_successes:1;
-	unsigned int output_finished:1;
-	unsigned int finish_called:1;
-	unsigned int global_remote_failure:1;
+	bool running:1;
+	bool xclient_sent:1;
+	bool rcpt_to_successes:1;
+	bool output_finished:1;
+	bool finish_called:1;
+	bool global_remote_failure:1;
 };
 
 static void lmtp_client_send_rcpts(struct lmtp_client *client);
@@ -326,8 +326,7 @@ static int lmtp_client_send_data(struct lmtp_client *client)
 	if (client->output_finished)
 		return 0;
 
-	while ((ret = i_stream_read_data(client->data_input,
-					 &data, &size, 0)) > 0) {
+	while ((ret = i_stream_read_more(client->data_input, &data, &size)) > 0) {
 		add = '\0';
 		for (i = 0; i < size; i++) {
 			if (data[i] == '\n') {
@@ -604,8 +603,8 @@ static void lmtp_client_input(struct lmtp_client *client)
 		lmtp_client_fail(client,
 				 "501 5.5.4 Command reply line too long");
 	} else if (client->input->stream_errno != 0) {
-		errno = client->input->stream_errno;
-		i_error("lmtp client: read() failed: %m");
+		i_error("lmtp client: read() failed: %s",
+			i_stream_get_error(client->input));
 		lmtp_client_fail(client, ERRSTR_TEMP_REMOTE_FAILURE
 				 " (read failure)");
 	} else if (client->input->eof) {
@@ -650,13 +649,11 @@ static int lmtp_client_output(struct lmtp_client *client)
 	int ret;
 
 	lmtp_client_ref(client);
-	o_stream_cork(client->output);
 	if ((ret = o_stream_flush(client->output)) < 0)
 		lmtp_client_fail(client, ERRSTR_TEMP_REMOTE_FAILURE
 				 " (disconnected in output)");
 	else if (client->input_state == LMTP_INPUT_STATE_DATA)
 		(void)lmtp_client_send_data(client);
-	o_stream_uncork(client->output);
 	if (client->to != NULL)
 		timeout_reset(client->to);
 	lmtp_client_unref(&client);
@@ -675,9 +672,8 @@ static int lmtp_client_connect(struct lmtp_client *client)
 			client->host, client->port);
 		return -1;
 	}
-	client->input =
-		i_stream_create_fd(client->fd, LMTP_MAX_LINE_LEN, FALSE);
-	client->output = o_stream_create_fd(client->fd, (size_t)-1, FALSE);
+	client->input = i_stream_create_fd(client->fd, LMTP_MAX_LINE_LEN);
+	client->output = o_stream_create_fd(client->fd, (size_t)-1);
 	o_stream_set_no_error_handling(client->output, TRUE);
 	o_stream_set_flush_callback(client->output, lmtp_client_output, client);
 	/* we're already sending data in ostream, so can't use IO_WRITE here */

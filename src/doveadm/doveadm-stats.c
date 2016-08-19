@@ -22,7 +22,7 @@ struct top_line {
 	/* [headers_count] */
 	const char **prev_values, **cur_values;
 
-	unsigned int flip:1;
+	bool flip:1;
 };
 
 struct top_context {
@@ -43,7 +43,7 @@ struct top_context {
 	unsigned int last_update_idx, user_idx;
 	unsigned int sort_idx1, sort_idx2;
 
-	unsigned int flip:1;
+	bool flip:1;
 };
 
 static struct top_context *sort_ctx = NULL;
@@ -111,7 +111,7 @@ static void stats_dump(const char *path, const char *cmd)
 		} while (args != NULL);
 	}
 	if (input->stream_errno != 0)
-		i_fatal("read(%s) failed: %m", path);
+		i_fatal("read(%s) failed: %s", path, i_stream_get_error(input));
 	i_stream_destroy(&input);
 }
 
@@ -191,11 +191,13 @@ static void stats_read(struct top_context *ctx)
 			stats_line_set_prev_values(ctx, old_line, line);
 			array_append(&ctx->lines, &line, 1);
 		}
-		hash_table_insert(ctx->sessions, line->id, line);
+		hash_table_update(ctx->sessions, line->id, line);
 	}
 
-	if (ctx->input->stream_errno != 0)
-		i_fatal("read(%s) failed: %m", ctx->path);
+	if (ctx->input->stream_errno != 0) {
+		i_fatal("read(%s) failed: %s", ctx->path,
+			i_stream_get_error(ctx->input));
+	}
 	i_fatal("read(%s): unexpected EOF", ctx->path);
 }
 
@@ -478,7 +480,7 @@ static void stats_top(const char *path, const char *sort_type)
 	hash_table_create(&ctx.sessions, default_pool, 0, str_hash, strcmp);
 	net_set_nonblock(ctx.fd, FALSE);
 
-	ctx.input = i_stream_create_fd(ctx.fd, (size_t)-1, FALSE);
+	ctx.input = i_stream_create_fd(ctx.fd, (size_t)-1);
 
 	if (strstr(sort_type, "cpu") != NULL)
 		ctx.lines_sort = sort_cpu;
@@ -505,7 +507,7 @@ static void stats_reset(const char *path, const char **items ATTR_UNUSED)
 
 	fd = doveadm_connect(path);
 	net_set_nonblock(fd, FALSE);
-	input = i_stream_create_fd(fd, (size_t)-1, FALSE);
+	input = i_stream_create_fd(fd, (size_t)-1);
 
 	cmd = t_str_new(10);
 	str_append(cmd, "RESET");

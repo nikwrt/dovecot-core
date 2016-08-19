@@ -19,6 +19,7 @@ static struct doveadm_cmd *doveadm_commands[] = {
 };
 
 static struct doveadm_cmd_ver2 *doveadm_commands_ver2[] = {
+	&doveadm_cmd_service_stop_ver2,
 	&doveadm_cmd_stop_ver2,
 	&doveadm_cmd_reload_ver2,
 	&doveadm_cmd_stats_dump_ver2,
@@ -61,53 +62,61 @@ const struct doveadm_cmd_ver2 *doveadm_cmd_find_ver2(const char *cmd_name)
 }
 
 const struct doveadm_cmd_ver2 *
-doveadm_cmd_find_with_args_ver2(const char *cmd_name, int argc, const char *const argv[])
+doveadm_cmd_find_with_args_ver2(const char *cmd_name, int *argc,
+				const char *const *argv[])
 {
-	int i;
+	int i, k;
 	const struct doveadm_cmd_ver2 *cmd;
 	const char *cptr;
 
-	for(i=0;i<argc;i++) {
-		if (strcmp(argv[i],cmd_name)==0) break;
+	for(i=0;i<*argc;i++) {
+		if (strcmp((*argv)[i],cmd_name)==0) break;
 	}
 
-	i_assert(i != argc);
+	i_assert(i != *argc);
 
 	array_foreach(&doveadm_cmds_ver2, cmd) {
 		cptr = cmd->name;
 		/* cannot reuse i here because this needs be
 		   done more than once */
-		for(int k=0; *cptr != '\0' && i+k < argc; k++) {
-			size_t alen = strlen(argv[i+k]);
+		for (k=0; *cptr != '\0' && i+k < *argc; k++) {
+			size_t alen = strlen((*argv)[i+k]);
 			/* make sure we don't overstep */
 			if (strlen(cptr) < alen) break;
 			/* did not match */
-			if (strncmp(cptr, argv[i+k], alen) != 0) break;
+			if (strncmp(cptr, (*argv)[i+k], alen) != 0) break;
 			/* do not accept abbreviations */
 			if (cptr[alen] != ' ' && cptr[alen] != '\0') break;
 			cptr += alen;
 			if (*cptr != '\0') cptr++; /* consume space */
 		}
 		/* name was fully consumed */
-		if (*cptr == '\0') return cmd;
+		if (*cptr == '\0') {
+			if (k > 1) {
+				*argc -= k-1;
+				*argv += k-1;
+			}
+			return cmd;
+		}
 	}
 
 	return NULL;
 }
 
 static bool
-doveadm_cmd_find_multi_word(const char *cmdname, int *_argc, const char **_argv[])
+doveadm_cmd_find_multi_word(const char *cmdname, int *_argc,
+			    const char *const *_argv[])
 {
 	int argc = *_argc;
-	const char **argv = *_argv;
+	const char *const *argv = *_argv;
 	unsigned int len;
 
 	if (argc < 2)
-		return NULL;
+		return FALSE;
 
 	len = strlen(argv[1]);
 	if (strncmp(cmdname, argv[1], len) != 0)
-		return NULL;
+		return FALSE;
 
 	argc--; argv++;
 	if (cmdname[len] == ' ') {
@@ -126,7 +135,8 @@ doveadm_cmd_find_multi_word(const char *cmdname, int *_argc, const char **_argv[
 }
 
 const struct doveadm_cmd *
-doveadm_cmd_find_with_args(const char *cmd_name, int *argc, const char **argv[])
+doveadm_cmd_find_with_args(const char *cmd_name, int *argc,
+			   const char *const *argv[])
 {
 	const struct doveadm_cmd *cmd;
 	unsigned int cmd_name_len;
@@ -164,10 +174,8 @@ void doveadm_cmds_init(void)
 	for (i = 0; i < N_ELEMENTS(doveadm_commands_ver2); i++)
 		doveadm_cmd_register_ver2(doveadm_commands_ver2[i]);
 
-	doveadm_register_auth_commands();
 	doveadm_register_director_commands();
 	doveadm_register_instance_commands();
-	doveadm_register_mount_commands();
 	doveadm_register_proxy_commands();
 	doveadm_register_log_commands();
 	doveadm_register_replicator_commands();
@@ -369,18 +377,17 @@ doveadm_build_options(const struct doveadm_cmd_param par[],
 {
 	for(size_t i=0; par[i].name != NULL; i++) {
 		struct option longopt;
+
+		memset(&longopt, 0, sizeof(longopt));
 		longopt.name = par[i].name;
-		longopt.flag = 0;
-		longopt.val = 0;
 		if (par[i].short_opt != '\0') {
 			longopt.val = par[i].short_opt;
 			str_append_c(shortopts, par[i].short_opt);
 			if (par[i].type != CMD_PARAM_BOOL)
 				str_append_c(shortopts, ':');
-		} else {
-			if (par[i].type != CMD_PARAM_BOOL) longopt.has_arg = 1;
-			else longopt.has_arg = 0;
 		}
+		if (par[i].type != CMD_PARAM_BOOL)
+			longopt.has_arg = 1;
 		array_append(longopts, &longopt, 1);
 	}
 	array_append_zero(longopts);
@@ -415,7 +422,7 @@ static void doveadm_fill_param(struct doveadm_cmd_param *param,
 	case CMD_PARAM_ISTREAM: {
 		struct istream *is;
 		if (strcmp(value,"-") == 0) {
-			is = i_stream_create_fd(STDIN_FILENO, IO_BLOCK_SIZE, FALSE);
+			is = i_stream_create_fd(STDIN_FILENO, IO_BLOCK_SIZE);
 		} else {
 			is = i_stream_create_file(value, IO_BLOCK_SIZE);
 		}
@@ -425,12 +432,12 @@ static void doveadm_fill_param(struct doveadm_cmd_param *param,
 }
 
 bool doveadm_cmd_try_run_ver2(const char *cmd_name,
-			      int argc, const char **argv,
+			      int argc, const char *const argv[],
 			      struct doveadm_cmd_context *cctx)
 {
 	const struct doveadm_cmd_ver2 *cmd;
 
-	cmd = doveadm_cmd_find_with_args_ver2(cmd_name, argc, argv);
+	cmd = doveadm_cmd_find_with_args_ver2(cmd_name, &argc, &argv);
 	if (cmd == NULL)
 		return FALSE;
 
@@ -440,13 +447,12 @@ bool doveadm_cmd_try_run_ver2(const char *cmd_name,
 	return TRUE;
 }
 
-int doveadm_cmd_run_ver2(int argc, const char **argv,
+int doveadm_cmd_run_ver2(int argc, const char *const argv[],
 			 struct doveadm_cmd_context *cctx)
 {
 	struct doveadm_cmd_param *param;
 	ARRAY_TYPE(doveadm_cmd_param_arr_t) pargv;
 	ARRAY_TYPE(getopt_option_array) opts;
-	const char *cptr;
 	unsigned int pargc;
 	int c,li;
 	pool_t pool = pool_datastack_create();
@@ -489,9 +495,6 @@ int doveadm_cmd_run_ver2(int argc, const char **argv,
 			}
 		}
 	}
-
-	cptr = cctx->cmd->name;
-	while((cptr = strchr(cptr+1, ' ')) != NULL) optind++;
 
 	/* process positional arguments */
 	for(;optind<argc;optind++) {

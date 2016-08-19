@@ -54,9 +54,10 @@ struct config_parser_context {
 
 	struct old_set_parser *old;
 
+	HASH_TABLE(const char *, const char *) seen_settings;
 	struct config_filter_context *filter;
-	unsigned int expand_values:1;
-	unsigned int hide_errors:1;
+	bool expand_values:1;
+	bool hide_errors:1;
 };
 
 extern void (*hook_config_parser_begin)(struct config_parser_context *ctx);

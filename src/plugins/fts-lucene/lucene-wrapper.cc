@@ -819,6 +819,30 @@ rescan_next(struct rescan_context *ctx, Document *doc)
 	}
 }
 
+static void
+rescan_clear_unseen_mailbox(struct lucene_index *index,
+			    struct rescan_context *rescan_ctx,
+			    const char *vname,
+			    const struct fts_index_header *hdr)
+{
+	struct mailbox *box;
+	struct mailbox_metadata metadata;
+
+	box = mailbox_alloc(index->list, vname,
+			    (enum mailbox_flags)0);
+	if (mailbox_open(box) == 0 &&
+	    mailbox_get_metadata(box, MAILBOX_METADATA_GUID,
+				 &metadata) == 0 &&
+	    (rescan_ctx == NULL ||
+	     hash_table_lookup(rescan_ctx->seen_mailbox_guids,
+			       metadata.guid) == NULL)) {
+		/* this mailbox had no records in lucene index.
+		   make sure its last indexed uid is 0 */
+		(void)fts_index_set_header(box, hdr);
+	}
+	mailbox_free(&box);
+}
+
 static void rescan_clear_unseen_mailboxes(struct lucene_index *index,
 					  struct rescan_context *rescan_ctx)
 {
@@ -828,30 +852,25 @@ static void rescan_clear_unseen_mailboxes(struct lucene_index *index,
 		 MAILBOX_LIST_ITER_RETURN_NO_FLAGS);
 	struct mailbox_list_iterate_context *iter;
 	const struct mailbox_info *info;
-	struct mailbox *box;
-	struct mailbox_metadata metadata;
 	struct fts_index_header hdr;
+	struct mail_namespace *ns = index->list->ns;
+	const char *vname;
 
 	memset(&hdr, 0, sizeof(hdr));
 	hdr.settings_checksum = fts_lucene_settings_checksum(&index->set);
 
 	iter = mailbox_list_iter_init(index->list, "*", iter_flags);
-	while ((info = mailbox_list_iter_next(iter)) != NULL) {
-		box = mailbox_alloc(index->list, info->vname,
-				    (enum mailbox_flags)0);
-		if (mailbox_open(box) == 0 &&
-		    mailbox_get_metadata(box, MAILBOX_METADATA_GUID,
-					 &metadata) == 0 &&
-		    (rescan_ctx == NULL ||
-		     hash_table_lookup(rescan_ctx->seen_mailbox_guids,
-				       metadata.guid) == NULL)) {
-			/* this mailbox had no records in lucene index.
-			   make sure its last indexed uid is 0 */
-			(void)fts_index_set_header(box, &hdr);
-		}
-		mailbox_free(&box);
-	}
+	while ((info = mailbox_list_iter_next(iter)) != NULL)
+		rescan_clear_unseen_mailbox(index, rescan_ctx, info->vname, &hdr);
 	(void)mailbox_list_iter_deinit(&iter);
+
+	if (ns->prefix_len > 0 &&
+	    ns->prefix[ns->prefix_len-1] == mail_namespace_get_sep(ns)) {
+		/* namespace prefix itself isn't returned by the listing */
+		vname = t_strndup(index->list->ns->prefix,
+				  index->list->ns->prefix_len-1);
+		rescan_clear_unseen_mailbox(index, rescan_ctx, vname, &hdr);
+	}
 }
 
 int lucene_index_rescan(struct lucene_index *index)
@@ -1181,6 +1200,9 @@ lucene_add_definite_query(struct lucene_index *index,
 	bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
 	Query *q;
 
+	if (arg->no_fts)
+		return false;
+
 	if (arg->match_not && !and_args) {
 		/* FIXME: we could handle this by doing multiple queries.. */
 		return false;
@@ -1246,6 +1268,9 @@ lucene_add_maybe_query(struct lucene_index *index,
 {
 	bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
 	Query *q = NULL;
+
+	if (arg->no_fts)
+		return false;
 
 	if (arg->match_not) {
 		/* FIXME: we could handle this by doing multiple queries.. */

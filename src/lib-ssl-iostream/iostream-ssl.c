@@ -81,22 +81,6 @@ void ssl_iostream_context_deinit(struct ssl_iostream_context **_ctx)
 	ssl_vfuncs->context_deinit(ctx);
 }
 
-int ssl_iostream_generate_params(buffer_t *output, unsigned int dh_length,
-				 const char **error_r)
-{
-	if (!ssl_module_loaded) {
-		if (ssl_module_load(error_r) < 0)
-			return -1;
-	}
-	return ssl_vfuncs->generate_params(output, dh_length, error_r);
-}
-
-int ssl_iostream_context_import_params(struct ssl_iostream_context *ctx,
-				       const buffer_t *input)
-{
-	return ssl_vfuncs->context_import_params(ctx, input);
-}
-
 int io_stream_create_ssl_client(struct ssl_iostream_context *ctx, const char *host,
 				const struct ssl_iostream_settings *set,
 				struct istream **input, struct ostream **output,
@@ -215,4 +199,27 @@ const char *ssl_iostream_get_security_string(struct ssl_iostream *ssl_io)
 const char *ssl_iostream_get_last_error(struct ssl_iostream *ssl_io)
 {
 	return ssl_vfuncs->get_last_error(ssl_io);
+}
+
+struct ssl_iostream_settings *
+ssl_iostream_settings_dup(pool_t pool,
+			  const struct ssl_iostream_settings *old_set)
+{
+	struct ssl_iostream_settings *new_set;
+
+	new_set = p_new(pool, struct ssl_iostream_settings, 1);
+	memcpy(new_set, old_set, sizeof(*new_set));
+
+	new_set->protocols = p_strdup(pool, old_set->protocols);
+	new_set->cipher_list = p_strdup(pool, old_set->cipher_list);
+	new_set->ca = p_strdup(pool, old_set->ca);
+	new_set->ca_file = p_strdup(pool, old_set->ca_file);
+	new_set->ca_dir = p_strdup(pool, old_set->ca_dir);
+	new_set->cert = p_strdup(pool, old_set->cert);
+	new_set->key = p_strdup(pool, old_set->key);
+	new_set->key_password = p_strdup(pool, old_set->key_password);
+	new_set->cert_username_field = p_strdup(pool, old_set->cert_username_field);
+	new_set->crypto_device = p_strdup(pool, old_set->crypto_device);
+
+	return new_set;
 }

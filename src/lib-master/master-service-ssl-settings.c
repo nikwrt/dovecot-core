@@ -20,6 +20,7 @@ static const struct setting_define master_service_ssl_setting_defines[] = {
 	DEF(SET_STR, ssl_cert),
 	DEF(SET_STR, ssl_key),
 	DEF(SET_STR, ssl_key_password),
+	DEF(SET_STR, ssl_dh),
 	DEF(SET_STR, ssl_cipher_list),
 	DEF(SET_STR, ssl_protocols),
 	DEF(SET_STR, ssl_cert_username_field),
@@ -43,6 +44,7 @@ static const struct master_service_ssl_settings master_service_ssl_default_setti
 	.ssl_cert = "",
 	.ssl_key = "",
 	.ssl_key_password = "",
+	.ssl_dh = "",
 	.ssl_cipher_list = "ALL:!LOW:!SSLv2:!EXP:!aNULL",
 	.ssl_protocols = "!SSLv2",
 	.ssl_cert_username_field = "commonName",
@@ -86,13 +88,17 @@ master_service_ssl_settings_check(void *_set, pool_t pool ATTR_UNUSED,
 	   and few of those tools care about SSL settings. so don't check
 	   ssl_cert/ssl_key/etc validity here except in doveconf, because it
 	   usually is just an extra annoyance. */
-#ifdef CONFIG
+#ifdef CONFIG_BINARY
 	if (*set->ssl_cert == '\0') {
 		*error_r = "ssl enabled, but ssl_cert not set";
 		return FALSE;
 	}
 	if (*set->ssl_key == '\0') {
 		*error_r = "ssl enabled, but ssl_key not set";
+		return FALSE;
+	}
+	if (*set->ssl_dh == '\0') {
+		*error_r = "ssl enabled, but ssl_dh not set";
 		return FALSE;
 	}
 #endif

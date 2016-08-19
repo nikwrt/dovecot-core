@@ -2,6 +2,7 @@
 
 #include "lib.h"
 #include "str.h"
+#include "strescape.h"
 #include "message-parser.h"
 #include "message-address.h"
 #include "rfc822-parser.h"
@@ -30,6 +31,49 @@ static void add_address(struct message_address_parser_context *ctx)
 	else
 		ctx->last_addr->next = addr;
 	ctx->last_addr = addr;
+}
+
+/* quote with "" and escape all '\', '"' and "'" characters if need */
+static void str_append_maybe_escape(string_t *dest, const char *cstr, bool escape_dot)
+{
+	const char *p;
+
+	/* see if we need to quote it */
+	for (p = cstr; *p != '\0'; p++) {
+		if (!IS_ATEXT(*p) && (escape_dot || *p != '.'))
+			break;
+	}
+
+	if (*p == '\0') {
+		str_append_data(dest, cstr, (size_t) (p - cstr));
+		return;
+	}
+
+	/* see if we need to escape it */
+	for (p = cstr; *p != '\0'; p++) {
+		if (IS_ESCAPED_CHAR(*p))
+			break;
+	}
+
+	if (*p == '\0') {
+		/* only quote */
+		str_append_c(dest, '"');
+		str_append_data(dest, cstr, (size_t) (p - cstr));
+		str_append_c(dest, '"');
+		return;
+	}
+
+	/* quote and escape */
+	str_append_c(dest, '"');
+	str_append_data(dest, cstr, (size_t) (p - cstr));
+
+	for (; *p != '\0'; p++) {
+		if (IS_ESCAPED_CHAR(*p))
+			str_append_c(dest, '\\');
+		str_append_c(dest, *p);
+	}
+
+	str_append_c(dest, '"');
 }
 
 static int parse_local_part(struct message_address_parser_context *ctx)
@@ -150,7 +194,7 @@ static int parse_name_addr(struct message_address_parser_context *ctx)
 		ctx->addr.domain = "SYNTAX_ERROR";
 		ctx->addr.invalid_syntax = TRUE;
 	}
-	return ctx->parser.data != ctx->parser.end;
+	return ctx->parser.data != ctx->parser.end ? 1 : 0;
 }
 
 static int parse_addr_spec(struct message_address_parser_context *ctx)
@@ -158,18 +202,25 @@ static int parse_addr_spec(struct message_address_parser_context *ctx)
 	/* addr-spec       = local-part "@" domain */
 	int ret, ret2;
 
-	str_truncate(ctx->parser.last_comment, 0);
+	if (ctx->parser.last_comment != NULL)
+		str_truncate(ctx->parser.last_comment, 0);
 
 	ret = parse_local_part(ctx);
+	if (ret <= 0) {
+		/* end of input or parsing local-part failed */
+		ctx->addr.invalid_syntax = TRUE;
+	}
 	if (ret != 0 && *ctx->parser.data == '@') {
 		ret2 = parse_domain(ctx);
 		if (ret2 <= 0)
 			ret = ret2;
 	}
 
-	if (str_len(ctx->parser.last_comment) > 0) {
-		ctx->addr.name =
-			p_strdup(ctx->pool, str_c(ctx->parser.last_comment));
+	if (ctx->parser.last_comment != NULL) {
+		if (str_len(ctx->parser.last_comment) > 0) {
+			ctx->addr.name =
+				p_strdup(ctx->pool, str_c(ctx->parser.last_comment));
+		}
 	}
 	return ret;
 }
@@ -198,6 +249,11 @@ static int parse_mailbox(struct message_address_parser_context *ctx)
 		/* nope, should be addr-spec */
 		ctx->parser.data = start;
 		ret = parse_addr_spec(ctx);
+		if (ctx->addr.invalid_syntax && ctx->addr.name == NULL &&
+		    ctx->addr.mailbox != NULL && ctx->addr.domain == NULL) {
+			ctx->addr.name = ctx->addr.mailbox;
+			ctx->addr.mailbox = NULL;
+		}
 	}
 
 	if (ret < 0)
@@ -340,6 +396,7 @@ message_address_parse(pool_t pool, const unsigned char *data, size_t size,
 
 void message_address_write(string_t *str, const struct message_address *addr)
 {
+	const char *tmp;
 	bool first = TRUE, in_group = FALSE;
 
 	/* a) mailbox@domain
@@ -356,8 +413,19 @@ void message_address_write(string_t *str, const struct message_address *addr)
 			if (!in_group) {
 				/* beginning of group. mailbox is the group
 				   name, others are NULL. */
-				if (addr->mailbox != NULL)
-					str_append(str, addr->mailbox);
+				if (addr->mailbox != NULL && *addr->mailbox != '\0') {
+					/* check for MIME encoded-word */
+					if (strstr(addr->mailbox, "=?") != NULL)
+						/* MIME encoded-word MUST NOT appear within a 'quoted-string'
+						   so escaping and quoting of phrase is not possible, instead
+						   use obsolete RFC822 phrase syntax which allow spaces */
+						str_append(str, addr->mailbox);
+					else
+						str_append_maybe_escape(str, addr->mailbox, TRUE);
+				} else {
+					/* empty group name needs to be quoted */
+					str_append(str, "\"\"");
+				}
 				str_append(str, ": ");
 				first = TRUE;
 			} else {
@@ -365,7 +433,12 @@ void message_address_write(string_t *str, const struct message_address *addr)
 				i_assert(addr->mailbox == NULL);
 
 				/* cut out the ", " */
-				str_truncate(str, str_len(str)-2);
+				tmp = str_c(str)+str_len(str)-2;
+				i_assert((tmp[0] == ',' || tmp[0] == ':') && tmp[1] == ' ');
+				if (tmp[0] == ',' && tmp[1] == ' ')
+					str_truncate(str, str_len(str)-2);
+				else if (tmp[0] == ':' && tmp[1] == ' ')
+					str_truncate(str, str_len(str)-1);
 				str_append_c(str, ';');
 			}
 
@@ -375,7 +448,7 @@ void message_address_write(string_t *str, const struct message_address *addr)
 			/* no name and no route. use only mailbox@domain */
 			i_assert(addr->mailbox != NULL);
 
-			str_append(str, addr->mailbox);
+			str_append_maybe_escape(str, addr->mailbox, FALSE);
 			str_append_c(str, '@');
 			str_append(str, addr->domain);
 		} else {
@@ -383,7 +456,14 @@ void message_address_write(string_t *str, const struct message_address *addr)
 			i_assert(addr->mailbox != NULL);
 
 			if (addr->name != NULL) {
-				str_append(str, addr->name);
+				/* check for MIME encoded-word */
+				if (strstr(addr->name, "=?") != NULL)
+					/* MIME encoded-word MUST NOT appear within a 'quoted-string'
+					   so escaping and quoting of phrase is not possible, instead
+					   use obsolete RFC822 phrase syntax which allow spaces */
+					str_append(str, addr->name);
+				else
+					str_append_maybe_escape(str, addr->name, TRUE);
 				str_append_c(str, ' ');
 			}
 			str_append_c(str, '<');
@@ -391,7 +471,7 @@ void message_address_write(string_t *str, const struct message_address *addr)
 				str_append(str, addr->route);
 				str_append_c(str, ':');
 			}
-			str_append(str, addr->mailbox);
+			str_append_maybe_escape(str, addr->mailbox, FALSE);
 			str_append_c(str, '@');
 			str_append(str, addr->domain);
 			str_append_c(str, '>');

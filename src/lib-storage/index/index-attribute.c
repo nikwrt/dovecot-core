@@ -33,6 +33,7 @@ static int
 index_storage_get_user_dict(struct mail_storage *err_storage,
 			    struct mail_user *user, struct dict **dict_r)
 {
+	struct dict_settings dict_set;
 	struct mail_namespace *ns;
 	struct mail_storage *attr_storage;
 	const char *error;
@@ -61,9 +62,10 @@ index_storage_get_user_dict(struct mail_storage *err_storage,
 		return -1;
 	}
 
-	if (dict_init(attr_storage->set->mail_attribute_dict,
-		      DICT_DATA_TYPE_STRING,
-		      user->username, user->set->base_dir,
+	memset(&dict_set, 0, sizeof(dict_set));
+	dict_set.username = user->username;
+	dict_set.base_dir = user->set->base_dir;
+	if (dict_init(attr_storage->set->mail_attribute_dict, &dict_set,
 		      &user->_attr_dict, &error) < 0) {
 		mail_storage_set_critical(err_storage,
 			"mail_attribute_dict: dict_init(%s) failed: %s",
@@ -124,8 +126,8 @@ index_storage_get_dict(struct mailbox *box, enum mail_attribute_type type,
 	set.base_dir = storage->user->set->base_dir;
 	if (mail_user_get_home(storage->user, &set.home_dir) <= 0)
 		set.home_dir = NULL;
-	if (dict_init_full(storage->set->mail_attribute_dict, &set,
-			   &storage->_shared_attr_dict, &error) < 0) {
+	if (dict_init(storage->set->mail_attribute_dict, &set,
+		      &storage->_shared_attr_dict, &error) < 0) {
 		mail_storage_set_critical(storage,
 			"mail_attribute_dict: dict_init(%s) failed: %s",
 			storage->set->mail_attribute_dict, error);
@@ -189,7 +191,8 @@ index_storage_attribute_get_dict_trans(struct mailbox_transaction_context *t,
 
 int index_storage_attribute_set(struct mailbox_transaction_context *t,
 				enum mail_attribute_type type, const char *key,
-				const struct mail_attribute_value *value)
+				const struct mail_attribute_value *value,
+				bool internal_attribute)
 {
 	struct dict_transaction_context *dtrans;
 	const char *mailbox_prefix;
@@ -197,7 +200,7 @@ int index_storage_attribute_set(struct mailbox_transaction_context *t,
 	time_t ts = value->last_change != 0 ? value->last_change : ioloop_time;
 	int ret = 0;
 
-	if (!t->internal_attribute &&
+	if (!internal_attribute &&
 	    !MAILBOX_ATTRIBUTE_KEY_IS_USER_ACCESSIBLE(key)) {
 		mail_storage_set_error(t->box->storage, MAIL_ERROR_PARAMS,
 			"Internal attributes cannot be changed directly");
@@ -228,28 +231,30 @@ int index_storage_attribute_set(struct mailbox_transaction_context *t,
 	return ret;
 }
 
-int index_storage_attribute_get(struct mailbox_transaction_context *t,
+int index_storage_attribute_get(struct mailbox *box,
 				enum mail_attribute_type type, const char *key,
-				struct mail_attribute_value *value_r)
+				struct mail_attribute_value *value_r,
+				bool internal_attribute)
 {
 	struct dict *dict;
-	const char *mailbox_prefix;
+	const char *mailbox_prefix, *error;
 	int ret;
 
 	memset(value_r, 0, sizeof(*value_r));
 
-	if (!t->internal_attribute &&
+	if (!internal_attribute &&
 	    !MAILBOX_ATTRIBUTE_KEY_IS_USER_ACCESSIBLE(key))
 		return 0;
 
-	if (index_storage_get_dict(t->box, type, &dict, &mailbox_prefix) < 0)
+	if (index_storage_get_dict(box, type, &dict, &mailbox_prefix) < 0)
 		return -1;
 
 	ret = dict_lookup(dict, pool_datastack_create(),
 			  key_get_prefixed(type, mailbox_prefix, key),
-			  &value_r->value);
+			  &value_r->value, &error);
 	if (ret < 0) {
-		mail_storage_set_internal_error(t->box->storage);
+		mail_storage_set_critical(box->storage,
+			"Failed to set attribute %s: %s", key, error);
 		return -1;
 	}
 	return ret;
@@ -299,13 +304,17 @@ int index_storage_attribute_iter_deinit(struct mailbox_attribute_iter *_iter)
 {
 	struct index_storage_attribute_iter *iter =
 		(struct index_storage_attribute_iter *)_iter;
+	const char *error;
 	int ret;
 
 	if (iter->diter == NULL) {
 		ret = iter->dict_disabled ? 0 : -1;
 	} else {
-		if ((ret = dict_iterate_deinit(&iter->diter)) < 0)
-			mail_storage_set_internal_error(_iter->box->storage);
+		if ((ret = dict_iterate_deinit(&iter->diter, &error)) < 0) {
+			mail_storage_set_critical(_iter->box->storage,
+				"dict_iterate(%s) failed: %s",
+				iter->prefix, error);
+		}
 	}
 	i_free(iter->prefix);
 	i_free(iter);

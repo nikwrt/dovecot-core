@@ -34,9 +34,9 @@ struct auth_worker_client {
 	struct timeout *to_idle;
 	time_t cmd_start;
 
-	unsigned int version_received:1;
-	unsigned int dbhash_received:1;
-	unsigned int error_sent:1;
+	bool version_received:1;
+	bool dbhash_received:1;
+	bool error_sent:1;
 };
 
 struct auth_worker_list_context {
@@ -152,7 +152,10 @@ static void verify_plain_callback(enum passdb_result result,
 	str_printfa(str, "%u\t", request->id);
 
 	if (result == PASSDB_RESULT_OK)
-		str_append(str, "OK");
+		if (auth_fields_exists(request->extra_fields, "noauthenticate"))
+			str_append(str, "NEXT");
+		else
+			str_append(str, "OK");
 	else
 		str_printfa(str, "FAIL\t%d", result);
 	if (result != PASSDB_RESULT_INTERNAL_FAILURE) {
@@ -235,10 +238,13 @@ lookup_credentials_callback(enum passdb_result result,
 	str = t_str_new(128);
 	str_printfa(str, "%u\t", request->id);
 
-	if (result != PASSDB_RESULT_OK)
+	if (result != PASSDB_RESULT_OK && result != PASSDB_RESULT_NEXT)
 		str_printfa(str, "FAIL\t%d", result);
 	else {
-		str_append(str, "OK\t");
+		if (result == PASSDB_RESULT_NEXT)
+			str_append(str, "NEXT\t");
+		else
+			str_append(str, "OK\t");
 		str_append_tabescaped(str, request->user);
 		str_append_c(str, '\t');
 		if (request->credentials_scheme[0] != '\0') {
@@ -422,6 +428,7 @@ auth_worker_handle_user(struct auth_worker_client *client,
 		return FALSE;
 	}
 
+	auth_request->userdb_lookup = TRUE;
 	auth_request->userdb =
 		auth_userdb_find_by_id(auth_request->userdb, userdb_id);
 	if (auth_request->userdb == NULL) {
@@ -739,9 +746,8 @@ auth_worker_client_create(struct auth *auth, int fd)
 
 	client->auth = auth;
 	client->fd = fd;
-	client->input = i_stream_create_fd(fd, AUTH_WORKER_MAX_LINE_LENGTH,
-					   FALSE);
-	client->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	client->input = i_stream_create_fd(fd, AUTH_WORKER_MAX_LINE_LENGTH);
+	client->output = o_stream_create_fd(fd, (size_t)-1);
 	o_stream_set_no_error_handling(client->output, TRUE);
 	o_stream_set_flush_callback(client->output, auth_worker_output, client);
 	client->io = io_add(fd, IO_READ, auth_worker_input, client);

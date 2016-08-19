@@ -341,7 +341,9 @@ int mail_namespaces_init_finish(struct mail_namespace *namespaces,
 		ns->next = namespaces;
 		namespaces = ns;
 	}
-	if (!namespaces_check(namespaces, error_r)) {
+	if (namespaces->user->autocreated) {
+		/* e.g. raw user - don't check namespaces' validity */
+	} else if (!namespaces_check(namespaces, error_r)) {
 		*error_r = t_strconcat("namespace configuration error: ",
 				       *error_r, NULL);
 		while (namespaces != NULL) {
@@ -401,11 +403,11 @@ int mail_namespaces_init(struct mail_user *user, const char **error_r)
 		}
 	}
 
-	if (namespaces != NULL)
-		return mail_namespaces_init_finish(namespaces, error_r);
-
-	/* no namespaces defined, create a default one */
-	return mail_namespaces_init_location(user, NULL, error_r);
+	if (namespaces == NULL) {
+		/* no namespaces defined, create a default one */
+		return mail_namespaces_init_location(user, NULL, error_r);
+	}
+	return mail_namespaces_init_finish(namespaces, error_r);
 }
 
 int mail_namespaces_init_location(struct mail_user *user, const char *location,
@@ -489,13 +491,7 @@ int mail_namespaces_init_location(struct mail_user *user, const char *location,
 		mail_namespace_free(ns);
 		return -1;
 	}
-	user->namespaces = ns;
-
-	T_BEGIN {
-		hook_mail_namespaces_added(ns);
-		hook_mail_namespaces_created(ns);
-	} T_END;
-	return 0;
+	return mail_namespaces_init_finish(ns, error_r);
 }
 
 struct mail_namespace *mail_namespaces_init_empty(struct mail_user *user)
@@ -511,7 +507,6 @@ struct mail_namespace *mail_namespaces_init_empty(struct mail_user *user)
 		NAMESPACE_FLAG_LIST_PREFIX | NAMESPACE_FLAG_SUBSCRIPTIONS;
 	ns->mail_set = mail_user_set_get_storage_set(user);
 	i_array_init(&ns->all_storages, 2);
-	user->namespaces = ns;
 	return ns;
 }
 
@@ -735,8 +730,13 @@ mail_namespace_find_unsubscribable(struct mail_namespace *namespaces,
 struct mail_namespace *
 mail_namespace_find_inbox(struct mail_namespace *namespaces)
 {
-	while ((namespaces->flags & NAMESPACE_FLAG_INBOX_USER) == 0)
+	i_assert(namespaces != NULL);
+
+	/* there should always be an INBOX */
+	while ((namespaces->flags & NAMESPACE_FLAG_INBOX_USER) == 0) {
 		namespaces = namespaces->next;
+		i_assert(namespaces != NULL);
+	}
 	return namespaces;
 }
 

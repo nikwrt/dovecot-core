@@ -115,24 +115,24 @@ openssl_iostream_verify_client_cert(int preverify_ok, X509_STORE_CTX *ctx)
 	ssl_io = SSL_get_ex_data(ssl, dovecot_ssl_extdata_index);
 	ssl_io->cert_received = TRUE;
 
-	subject = X509_get_subject_name(ctx->current_cert);
+	subject = X509_get_subject_name(X509_STORE_CTX_get_current_cert(ctx));
 	if (subject == NULL ||
 	    X509_NAME_oneline(subject, certname, sizeof(certname)) == NULL)
 		certname[0] = '\0';
 	else
 		certname[sizeof(certname)-1] = '\0'; /* just in case.. */
-	if (!preverify_ok) {
+	if (preverify_ok == 0) {
 		openssl_iostream_set_error(ssl_io, t_strdup_printf(
 			"Received invalid SSL certificate: %s: %s",
-			X509_verify_cert_error_string(ctx->error), certname));
+			X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx)), certname));
 		if (ssl_io->verbose_invalid_cert)
 			i_info("%s", ssl_io->last_error);
 	} else if (ssl_io->verbose) {
 		i_info("Received valid SSL certificate: %s", certname);
 	}
-	if (!preverify_ok) {
+	if (preverify_ok == 0) {
 		ssl_io->cert_broken = TRUE;
-		if (ssl_io->require_valid_cert) {
+		if (!ssl_io->allow_invalid_cert) {
 			ssl_io->handshake_failed = TRUE;
 			return 0;
 		}
@@ -153,7 +153,7 @@ openssl_iostream_set(struct ssl_iostream *ssl_io,
 
        if (set->cipher_list != NULL &&
 	    strcmp(ctx_set->cipher_list, set->cipher_list) != 0) {
-		if (!SSL_set_cipher_list(ssl_io->ssl, set->cipher_list)) {
+		if (SSL_set_cipher_list(ssl_io->ssl, set->cipher_list) == 0) {
 			*error_r = t_strdup_printf(
 				"Can't set cipher list to '%s': %s",
 				set->cipher_list, openssl_iostream_error());
@@ -199,7 +199,7 @@ openssl_iostream_set(struct ssl_iostream *ssl_io,
 
 	ssl_io->verbose = set->verbose;
 	ssl_io->verbose_invalid_cert = set->verbose_invalid_cert || set->verbose;
-	ssl_io->require_valid_cert = set->require_valid_cert;
+	ssl_io->allow_invalid_cert = set->allow_invalid_cert;
 	return 0;
 }
 
@@ -375,7 +375,7 @@ openssl_iostream_read_more(struct ssl_iostream *ssl_io,
 		return 0;
 	}
 
-	if (i_stream_read_data(ssl_io->plain_input, data_r, size_r, 0) < 0)
+	if (i_stream_read_more(ssl_io->plain_input, data_r, size_r) < 0)
 		return -1;
 	return 0;
 }
@@ -664,7 +664,7 @@ openssl_iostream_get_peer_name(struct ssl_iostream *ssl_io)
 	if (len < 0)
 		name = "";
 	else {
-		name = t_malloc(len + 1);
+		name = t_malloc0(len + 1);
 		if (X509_NAME_get_text_by_NID(X509_get_subject_name(x509),
 					      ssl_io->username_nid,
 					      name, len + 1) < 0)
@@ -725,9 +725,6 @@ const struct iostream_ssl_vfuncs ssl_vfuncs = {
 	openssl_iostream_context_init_client,
 	openssl_iostream_context_init_server,
 	openssl_iostream_context_deinit,
-
-	openssl_iostream_generate_params,
-	openssl_iostream_context_import_params,
 
 	openssl_iostream_create,
 	openssl_iostream_unref,

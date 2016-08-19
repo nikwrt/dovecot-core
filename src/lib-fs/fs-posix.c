@@ -35,6 +35,7 @@ struct posix_fs {
 	enum fs_posix_lock_method lock_method;
 	mode_t mode;
 	bool mode_auto;
+	bool have_dirs;
 };
 
 struct posix_fs_file {
@@ -47,7 +48,6 @@ struct posix_fs_file {
 	buffer_t *write_buf;
 
 	bool seek_to_beginning;
-	bool success;
 };
 
 struct posix_fs_lock {
@@ -88,7 +88,7 @@ fs_posix_init(struct fs *_fs, const char *args, const struct fs_settings *set)
 	fs->lock_method = FS_POSIX_LOCK_METHOD_FLOCK;
 	fs->mode = FS_DEFAULT_MODE;
 
-	tmp = t_strsplit_spaces(args, " ");
+	tmp = t_strsplit_spaces(args, ":");
 	for (; *tmp != NULL; tmp++) {
 		const char *arg = *tmp;
 
@@ -97,14 +97,12 @@ fs_posix_init(struct fs *_fs, const char *args, const struct fs_settings *set)
 		else if (strcmp(arg, "lock=dotlock") == 0)
 			fs->lock_method = FS_POSIX_LOCK_METHOD_DOTLOCK;
 		else if (strncmp(arg, "prefix=", 7) == 0) {
-			unsigned int len = strlen(arg + 7);
 			i_free(fs->path_prefix);
-			if (len > 0 && arg[7+len-1] != '/')
-				fs->path_prefix = i_strconcat(arg + 7, "/", NULL);
-			else
-				fs->path_prefix = i_strdup(arg + 7);
+			fs->path_prefix = i_strdup(arg + 7);
 		} else if (strcmp(arg, "mode=auto") == 0) {
 			fs->mode_auto = TRUE;
+		} else if (strcmp(arg, "dirs") == 0) {
+			fs->have_dirs = TRUE;
 		} else if (strncmp(arg, "mode=", 5) == 0) {
 			unsigned int mode;
 			if (str_to_uint_oct(arg+5, &mode) < 0) {
@@ -134,13 +132,21 @@ static void fs_posix_deinit(struct fs *_fs)
 	i_free(fs);
 }
 
-static enum fs_properties fs_posix_get_properties(struct fs *fs ATTR_UNUSED)
+static enum fs_properties fs_posix_get_properties(struct fs *_fs)
 {
-	/* FS_PROPERTY_DIRECTORIES not returned because fs_delete()
-	   automatically rmdir()s parents. This could be changed later though,
-	   but SIS code at least would need to be changed to support it. */
-	return FS_PROPERTY_LOCKS | FS_PROPERTY_FASTCOPY | FS_PROPERTY_RENAME |
+	struct posix_fs *fs = (struct posix_fs *)_fs;
+	enum fs_properties props =
+		FS_PROPERTY_LOCKS | FS_PROPERTY_FASTCOPY | FS_PROPERTY_RENAME |
 		FS_PROPERTY_STAT | FS_PROPERTY_ITER | FS_PROPERTY_RELIABLEITER;
+
+	/* FS_PROPERTY_DIRECTORIES is not returned normally because fs_delete()
+	   automatically rmdir()s parents. For backwards compatibility
+	   (especially with SIS code) we'll do it that way, but optionally with
+	   "dirs" parameter enable them. This is especially important to be
+	   able to use doveadm fs commands to delete empty directories. */
+	if (fs->have_dirs)
+		props |= FS_PROPERTY_DIRECTORIES;
+	return props;
 }
 
 static int
@@ -202,12 +208,15 @@ static int fs_posix_rmdir_parents(struct posix_fs *fs, const char *path)
 {
 	const char *p;
 
-	if (fs->root_path == NULL)
+	if (fs->have_dirs)
+		return 0;
+	if (fs->root_path == NULL && fs->path_prefix == NULL)
 		return 0;
 
 	while ((p = strrchr(path, '/')) != NULL) {
 		path = t_strdup_until(path, p);
-		if (strcmp(path, fs->root_path) == 0)
+		if ((fs->root_path != NULL && strcmp(path, fs->root_path) == 0) ||
+		    (fs->path_prefix != NULL && strncmp(path, fs->path_prefix, strlen(path)) == 0))
 			break;
 		if (rmdir(path) == 0) {
 			/* success, continue to parent */
@@ -345,7 +354,7 @@ static void fs_posix_file_deinit(struct fs_file *_file)
 	case FS_OPEN_MODE_CREATE_UNIQUE_128:
 	case FS_OPEN_MODE_CREATE:
 	case FS_OPEN_MODE_REPLACE:
-		if (file->success || file->temp_path == NULL)
+		if (file->temp_path == NULL)
 			break;
 		/* failed to create/replace this. delete the temp file */
 		if (unlink(file->temp_path) < 0) {
@@ -432,7 +441,7 @@ fs_posix_read_stream(struct fs_file *_file, size_t max_buffer_size)
 
 static int fs_posix_write_finish(struct posix_fs_file *file)
 {
-	int ret;
+	int ret, old_errno;
 
 	if ((file->open_flags & FS_OPEN_FLAG_FSYNC) != 0) {
 		if (fdatasync(file->fd) < 0) {
@@ -449,10 +458,12 @@ static int fs_posix_write_finish(struct posix_fs_file *file)
 			fs_set_error(file->file.fs, "link(%s, %s) failed: %m",
 				     file->temp_path, file->full_path);
 		}
+		old_errno = errno;
 		if (unlink(file->temp_path) < 0) {
 			fs_set_error(file->file.fs, "unlink(%s) failed: %m",
 				     file->temp_path);
 		}
+		errno = old_errno;
 		if (ret < 0) {
 			fs_posix_file_close(&file->file);
 			i_free_and_null(file->temp_path);
@@ -470,7 +481,6 @@ static int fs_posix_write_finish(struct posix_fs_file *file)
 		i_unreached();
 	}
 	i_free_and_null(file->temp_path);
-	file->success = TRUE;
 	file->seek_to_beginning = TRUE;
 	/* allow opening the file after writing to it */
 	file->open_mode = FS_OPEN_MODE_READONLY;
@@ -873,6 +883,8 @@ const struct fs fs_class_posix = {
 		fs_posix_delete,
 		fs_posix_iter_init,
 		fs_posix_iter_next,
-		fs_posix_iter_deinit
+		fs_posix_iter_deinit,
+		NULL,
+		NULL,
 	}
 };

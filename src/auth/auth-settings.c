@@ -2,6 +2,7 @@
 
 #include "lib.h"
 #include "array.h"
+#include "hash-method.h"
 #include "settings-parser.h"
 #include "master-service-private.h"
 #include "master-service-settings.h"
@@ -121,6 +122,7 @@ static const struct setting_define auth_passdb_setting_defines[] = {
 	DEF(SET_BOOL, deny),
 	DEF(SET_BOOL, pass),
 	DEF(SET_BOOL, master),
+	DEF(SET_ENUM, auth_verbose),
 
 	SETTING_DEFINE_LIST_END
 };
@@ -139,7 +141,8 @@ static const struct auth_passdb_settings auth_passdb_default_settings = {
 
 	.deny = FALSE,
 	.pass = FALSE,
-	.master = FALSE
+	.master = FALSE,
+	.auth_verbose = "default:yes:no"
 };
 
 const struct setting_parser_info auth_passdb_setting_parser_info = {
@@ -171,6 +174,8 @@ static const struct setting_define auth_userdb_setting_defines[] = {
 	DEF(SET_ENUM, result_failure),
 	DEF(SET_ENUM, result_internalfail),
 
+	DEF(SET_ENUM, auth_verbose),
+
 	SETTING_DEFINE_LIST_END
 };
 
@@ -185,7 +190,9 @@ static const struct auth_userdb_settings auth_userdb_default_settings = {
 	.skip = "never:found:notfound",
 	.result_success = "return-ok:return:return-fail:continue:continue-ok:continue-fail",
 	.result_failure = "continue:return:return-ok:return-fail:continue-ok:continue-fail",
-	.result_internalfail = "continue:return:return-ok:return-fail:continue-ok:continue-fail"
+	.result_internalfail = "continue:return:return-ok:return-fail:continue-ok:continue-fail",
+
+	.auth_verbose = "default:yes:no"
 };
 
 const struct setting_parser_info auth_userdb_setting_parser_info = {
@@ -230,6 +237,15 @@ static const struct setting_define auth_setting_defines[] = {
 	DEF(SET_STR, proxy_self),
 	DEF(SET_TIME, failure_delay),
 
+	DEF(SET_STR, policy_server_url),
+	DEF(SET_STR, policy_server_api_header),
+	DEF(SET_UINT, policy_server_timeout_msecs),
+	DEF(SET_STR, policy_hash_mech),
+	DEF(SET_STR, policy_hash_nonce),
+	DEF(SET_STR, policy_request_attributes),
+	DEF(SET_BOOL, policy_reject_on_fail),
+	DEF(SET_UINT, policy_hash_truncate),
+
 	DEF(SET_BOOL, stats),
 	DEF(SET_BOOL, verbose),
 	DEF(SET_BOOL, debug),
@@ -248,6 +264,8 @@ static const struct setting_define auth_setting_defines[] = {
 	DEF_NOPREFIX(SET_BOOL, verbose_proctitle),
 	DEF_NOPREFIX(SET_UINT, first_valid_uid),
 	DEF_NOPREFIX(SET_UINT, last_valid_uid),
+	DEF_NOPREFIX(SET_UINT, first_valid_gid),
+	DEF_NOPREFIX(SET_UINT, last_valid_gid),
 
 	SETTING_DEFINE_LIST_END
 };
@@ -270,6 +288,15 @@ static const struct auth_settings auth_default_settings = {
 	.proxy_self = "",
 	.failure_delay = 2,
 
+	.policy_server_url = "",
+	.policy_server_api_header = "",
+	.policy_server_timeout_msecs = 2000,
+	.policy_hash_mech = "sha256",
+	.policy_hash_nonce = "",
+	.policy_request_attributes = "login=%{orig_username} pwhash=%{hashed_password} remote=%{real_rip}",
+	.policy_reject_on_fail = FALSE,
+	.policy_hash_truncate = 12,
+
 	.stats = FALSE,
 	.verbose = FALSE,
 	.debug = FALSE,
@@ -288,6 +315,8 @@ static const struct auth_settings auth_default_settings = {
 	.verbose_proctitle = FALSE,
 	.first_valid_uid = 500,
 	.last_valid_uid = 0,
+	.first_valid_gid = 1,
+	.last_valid_gid = 0,
 };
 
 const struct setting_parser_info auth_setting_parser_info = {
@@ -411,6 +440,25 @@ static bool auth_settings_check(void *_set, pool_t pool,
 	}
 	set->realms_arr =
 		(const char *const *)p_strsplit_spaces(pool, set->realms, " ");
+
+	if (*set->policy_server_url != '\0') {
+		if (*set->policy_hash_nonce == '\0') {
+
+			*error_r = "auth_policy_hash_nonce must be set when policy server is used";
+			return FALSE;
+		}
+		const struct hash_method *digest = hash_method_lookup(set->policy_hash_mech);
+		if (digest == NULL) {
+			*error_r = "invalid auth_policy_hash_mech given";
+			return FALSE;
+		}
+		if (set->policy_hash_truncate > 0 && set->policy_hash_truncate >= digest->digest_size*8) {
+			*error_r = t_strdup_printf("policy_hash_truncate is not smaller than digest size (%u >= %u)",
+				set->policy_hash_truncate,
+				digest->digest_size*8);
+			return FALSE;
+		}
+	}
 
 	if (!auth_settings_set_self_ips(set, pool, error_r))
 		return FALSE;

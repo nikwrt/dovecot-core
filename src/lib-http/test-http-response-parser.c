@@ -116,7 +116,7 @@ static void test_http_response_parse_valid(void)
 		payload = NULL;
 		for (pos = 0; pos < response_text_len && ret == 0; pos++) {
 			test_istream_set_size(input, pos);
-			ret = http_response_parse_next(parser, FALSE, &response, &error);
+			ret = http_response_parse_next(parser, HTTP_RESPONSE_PAYLOAD_TYPE_ALLOWED, &response, &error);
 		}
 		test_istream_set_size(input, response_text_len);
 		i_stream_unref(&input);
@@ -126,13 +126,13 @@ static void test_http_response_parse_valid(void)
 				buffer_set_used_size(payload_buffer, 0);
 				output = o_stream_create_buffer(payload_buffer);
 				test_out("payload receive", 
-					o_stream_send_istream(output, response.payload));
+					o_stream_send_istream(output, response.payload) == OSTREAM_SEND_ISTREAM_RESULT_FINISHED);
 				o_stream_destroy(&output);
 				payload = str_c(payload_buffer);
 			} else {
 				payload = NULL;
 			}
-			ret = http_response_parse_next(parser, FALSE, &response, &error);
+			ret = http_response_parse_next(parser, HTTP_RESPONSE_PAYLOAD_TYPE_ALLOWED, &response, &error);
 		}
 
 		test_out("parse success", ret == 0);
@@ -203,7 +203,7 @@ static void test_http_response_parse_invalid(void)
 
 		test_begin(t_strdup_printf("http response invalid [%d]", i));
 
-		while ((ret=http_response_parse_next(parser, FALSE, &response, &error)) > 0);
+		while ((ret=http_response_parse_next(parser, HTTP_RESPONSE_PAYLOAD_TYPE_ALLOWED, &response, &error)) > 0);
 
 		test_assert(ret < 0);
 		test_end();
@@ -235,7 +235,7 @@ static void test_http_response_parse_bad(void)
 					  sizeof(bad_response_with_nuls)-1);
 	parser = http_response_parser_init(input, NULL);
 	i_stream_unref(&input);
-	while ((ret=http_response_parse_next(parser, FALSE, &response, &error)) > 0);
+	while ((ret=http_response_parse_next(parser, HTTP_RESPONSE_PAYLOAD_TYPE_ALLOWED, &response, &error)) > 0);
 	test_out("parse success", ret == 0);
 	header = http_response_header_get(&response, "server");
 	test_out("header present", header != NULL);

@@ -18,6 +18,7 @@ struct auth_passdb_settings {
 	bool deny;
 	bool pass; /* deprecated, use result_success=continue instead */
 	bool master;
+	const char *auth_verbose;
 };
 
 struct auth_userdb_settings {
@@ -31,6 +32,7 @@ struct auth_userdb_settings {
 	const char *result_success;
 	const char *result_failure;
 	const char *result_internalfail;
+	const char *auth_verbose;
 };
 
 struct auth_settings {
@@ -51,6 +53,15 @@ struct auth_settings {
 	const char *proxy_self;
 	unsigned int failure_delay;
 
+	const char *policy_server_url;
+	const char *policy_server_api_header;
+	unsigned int policy_server_timeout_msecs;
+	const char *policy_hash_mech;
+	const char *policy_hash_nonce;
+	const char *policy_request_attributes;
+	bool policy_reject_on_fail;
+	unsigned int policy_hash_truncate;
+
 	bool stats;
 	bool verbose, debug, debug_passwords;
 	const char *verbose_passwords;
@@ -68,6 +79,8 @@ struct auth_settings {
 	bool verbose_proctitle;
 	unsigned int first_valid_uid;
 	unsigned int last_valid_uid;
+	unsigned int first_valid_gid;
+	unsigned int last_valid_gid;
 
 	/* generated: */
 	char username_chars_map[256];

@@ -38,7 +38,7 @@ struct config_dump_human_context {
 	ARRAY_TYPE(const_string) errors;
 	struct config_export_context *export_ctx;
 
-	unsigned int list_prefix_sent:1;
+	bool list_prefix_sent:1;
 };
 
 #define LIST_KEY_PREFIX "\001"
@@ -304,7 +304,9 @@ config_dump_human_output(struct config_dump_human_context *ctx,
 		o_stream_nsend(output, key, value-key);
 		o_stream_nsend_str(output, " = ");
 		if (hide_passwords && value[1] != '\0' &&
-		    value-key > 9 && strncmp(value-9, "_password", 9) == 0) {
+		    ((value-key > 9 && strncmp(value-9, "_password", 9) == 0) ||
+		     strncmp(key, "ssl_key",7) == 0 ||
+		     strncmp(key, "ssl_dh",6) == 0))  {
 			o_stream_nsend_str(output, " # hidden, use -P to show it");
 		} else if (!value_need_quote(value+1))
 			o_stream_nsend_str(output, value+1);
@@ -434,7 +436,7 @@ config_dump_human(const struct config_filter *filter, const char *const *modules
 	struct ostream *output;
 	int ret;
 
-	output = o_stream_create_fd(STDOUT_FILENO, 0, FALSE);
+	output = o_stream_create_fd(STDOUT_FILENO, 0);
 	o_stream_set_no_error_handling(output, TRUE);
 	o_stream_cork(output);
 
@@ -701,6 +703,9 @@ static void failure_exit_callback(int *status)
 
 int main(int argc, char *argv[])
 {
+	enum master_service_flags master_service_flags =
+		MASTER_SERVICE_FLAG_STANDALONE |
+		MASTER_SERVICE_FLAG_NO_INIT_DATASTACK_FRAME;
 	enum config_dump_scope scope = CONFIG_DUMP_SCOPE_ALL;
 	const char *orig_config_path, *config_path, *module;
 	ARRAY(const char *) module_names;
@@ -720,8 +725,7 @@ int main(int argc, char *argv[])
 	}
 
 	memset(&filter, 0, sizeof(filter));
-	master_service = master_service_init("config",
-					     MASTER_SERVICE_FLAG_STANDALONE,
+	master_service = master_service_init("config", master_service_flags,
 					     &argc, &argv, "adf:hHm:nNpPexS");
 	orig_config_path = master_service_get_config_path(master_service);
 
@@ -881,6 +885,7 @@ int main(int argc, char *argv[])
 
 	config_filter_deinit(&config_filter);
 	module_dir_unload(&modules);
+	config_parser_deinit();
 	master_service_deinit(&master_service);
         return 0;
 }

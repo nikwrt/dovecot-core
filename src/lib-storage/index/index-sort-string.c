@@ -17,9 +17,9 @@
 
 struct mail_sort_node {
 	uint32_t seq:29;
-	uint32_t wanted:1;
-	uint32_t no_update:1;
-	uint32_t sort_id_changed:1;
+	bool wanted:1;
+	bool no_update:1;
+	bool sort_id_changed:1;
 	uint32_t sort_id;
 };
 ARRAY_DEFINE_TYPE(mail_sort_node, struct mail_sort_node);
@@ -36,12 +36,12 @@ struct sort_string_context {
 	uint32_t ext_id, last_seq, highest_reset_id, prev_seq;
 	uint32_t lowest_nonexpunged_zero;
 
-	unsigned int regetting:1;
-	unsigned int have_all_wanted:1;
-	unsigned int no_writing:1;
-	unsigned int reverse:1;
-	unsigned int seqs_nonsorted:1;
-	unsigned int broken:1;
+	bool regetting:1;
+	bool have_all_wanted:1;
+	bool no_writing:1;
+	bool reverse:1;
+	bool seqs_nonsorted:1;
+	bool broken:1;
 };
 
 static char expunged_msg;

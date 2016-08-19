@@ -281,7 +281,7 @@ static int astream_open_output(struct attachment_istream *astream)
 		return -1;
 
 	astream->part.temp_fd = fd;
-	astream->part.temp_output = o_stream_create_fd(fd, 0, FALSE);
+	astream->part.temp_output = o_stream_create_fd(fd, 0);
 	o_stream_cork(astream->part.temp_output);
 	return 0;
 }
@@ -369,7 +369,7 @@ static int astream_decode_base64(struct attachment_istream *astream)
 		return -1;
 
 	buf = buffer_create_dynamic(default_pool, 1024);
-	input = i_stream_create_fd(part->temp_fd, IO_BLOCK_SIZE, FALSE);
+	input = i_stream_create_fd(part->temp_fd, IO_BLOCK_SIZE);
 	base64_input = i_stream_create_limit(input, part->base64_bytes);
 	output = o_stream_create_fd_file(outfd, 0, FALSE);
 	o_stream_cork(output);
@@ -410,7 +410,7 @@ static int astream_decode_base64(struct attachment_istream *astream)
 	if (input->v_offset != part->temp_output->offset && !failed) {
 		/* write the rest of the data to the message stream */
 		extra_buf = buffer_create_dynamic(default_pool, 1024);
-		while ((ret = i_stream_read_data(input, &data, &size, 0)) > 0) {
+		while ((ret = i_stream_read_more(input, &data, &size)) > 0) {
 			buffer_append(extra_buf, data, size);
 			i_stream_skip(input, size);
 		}
@@ -509,8 +509,8 @@ astream_part_finish(struct attachment_istream *astream, const char **error_r)
 		return -1;
 
 	/* copy data to attachment from temp file */
-	input = i_stream_create_fd(part->temp_fd, IO_BLOCK_SIZE, FALSE);
-	while (i_stream_read_data(input, &data, &size, 0) > 0) {
+	input = i_stream_create_fd(part->temp_fd, IO_BLOCK_SIZE);
+	while (i_stream_read_more(input, &data, &size) > 0) {
 		o_stream_nsend(output, data, size);
 		i_stream_skip(input, size);
 	}
@@ -594,7 +594,7 @@ static int astream_read_next(struct attachment_istream *astream, bool *retry_r)
 
 	*retry_r = FALSE;
 
-	if (stream->pos - stream->skip >= stream->max_buffer_size)
+	if (stream->pos - stream->skip >= i_stream_get_max_buffer_size(&stream->istream))
 		return -2;
 
 	if (astream->failed) {
@@ -681,8 +681,7 @@ static void i_stream_attachment_extractor_close(struct iostream_private *stream,
 	struct message_part *parts;
 
 	if (astream->parser != NULL) {
-		if (message_parser_deinit(&astream->parser, &parts) < 0)
-			i_unreached(); /* we didn't use preparsed message_parts */
+		message_parser_deinit(&astream->parser, &parts);
 	}
 	hash_format_deinit_free(&astream->set.hash_format);
 	if (astream->pool != NULL)

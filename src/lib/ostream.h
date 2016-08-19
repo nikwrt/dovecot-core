@@ -3,20 +3,42 @@
 
 #include "ioloop.h"
 
+enum ostream_send_istream_result {
+	/* All of the istream was successfully sent to ostream. */
+	OSTREAM_SEND_ISTREAM_RESULT_FINISHED,
+	/* Caller needs to wait for more input from non-blocking istream. */
+	OSTREAM_SEND_ISTREAM_RESULT_WAIT_INPUT,
+	/* Caller needs to wait for output to non-blocking ostream.
+	   o_stream_set_flush_pending() is automatically called. */
+	OSTREAM_SEND_ISTREAM_RESULT_WAIT_OUTPUT,
+	/* Read from istream failed. See istream->stream_errno. */
+	OSTREAM_SEND_ISTREAM_RESULT_ERROR_INPUT,
+	/* Write to ostream failed. See ostream->stream_errno. */
+	OSTREAM_SEND_ISTREAM_RESULT_ERROR_OUTPUT
+};
+
 struct ostream {
+	/* Number of bytes sent via o_stream_send*() and similar functions.
+	   This is counting the input data. For example with a compressed
+	   ostream this is counting the uncompressed bytes. The compressed
+	   bytes could be counted from the parent ostream's offset.
+
+	   Seeking to a specified offset only makes sense if there is no
+	   difference between input and output data sizes (e.g. there are no
+	   wrapper ostreams changing the data). */
 	uoff_t offset;
 
 	/* errno for the last operation send/seek operation. cleared before
 	   each call. */
 	int stream_errno;
-	/* errno of the last failed send/seek. never cleared. */
-	int last_failed_errno;
 
 	/* overflow is set when some of the data given to send()
 	   functions was neither sent nor buffered. It's never unset inside
 	   ostream code. */
-	unsigned int overflow:1;
-	unsigned int closed:1;
+	bool overflow:1;
+	/* o_stream_send() writes all the data or returns failure */
+	bool blocking:1;
+	bool closed:1;
 
 	struct ostream_private *real_stream;
 };
@@ -29,8 +51,7 @@ typedef void ostream_callback_t(void *context);
 
 /* Create new output stream from given file descriptor.
    If max_buffer_size is 0, an "optimal" buffer size is used (max 128kB). */
-struct ostream *
-o_stream_create_fd(int fd, size_t max_buffer_size, bool autoclose_fd);
+struct ostream *o_stream_create_fd(int fd, size_t max_buffer_size);
 /* The fd is set to -1 immediately to avoid accidentally closing it twice. */
 struct ostream *o_stream_create_fd_autoclose(int *fd, size_t max_buffer_size);
 /* Create an output stream from a regular file which begins at given offset.
@@ -56,8 +77,7 @@ const char *o_stream_get_name(struct ostream *stream);
 
 /* Return file descriptor for stream, or -1 if none is available. */
 int o_stream_get_fd(struct ostream *stream);
-/* Returns error string for the previous error (stream_errno,
-   not last_failed_errno). */
+/* Returns error string for the previous error. */
 const char *o_stream_get_error(struct ostream *stream);
 
 /* Close this stream (but not its parents) and unreference it. */
@@ -122,17 +142,19 @@ ssize_t o_stream_send(struct ostream *stream, const void *data, size_t size);
 ssize_t o_stream_sendv(struct ostream *stream, const struct const_iovec *iov,
 		       unsigned int iov_count);
 ssize_t o_stream_send_str(struct ostream *stream, const char *str);
-/* Send with delayed error handling. o_stream_has_errors() or
+/* Send with delayed error handling. o_stream_nfinish() or
    o_stream_ignore_last_errors() must be called after these functions before
-   the stream is destroyed. */
+   the stream is destroyed. If any of the data can't be sent due to stream's
+   buffer getting full, all further nsends are ignores and o_stream_nfinish()
+   will fail. */
 void o_stream_nsend(struct ostream *stream, const void *data, size_t size);
 void o_stream_nsendv(struct ostream *stream, const struct const_iovec *iov,
 		     unsigned int iov_count);
 void o_stream_nsend_str(struct ostream *stream, const char *str);
 void o_stream_nflush(struct ostream *stream);
-/* Flushes the stream and returns -1 if stream->last_failed_errno is
-   non-zero. Marks the stream's error handling as completed. errno is also set
-   to last_failed_errno. */
+/* Marks the stream's error handling as completed. Flushes the stream and
+   returns -1 if stream->stream_errno is non-zero. Returns failure if any of
+   the o_stream_nsend*() didn't write all data. */
 int o_stream_nfinish(struct ostream *stream);
 /* Marks the stream's error handling as completed to avoid i_panic() on
    destroy. */
@@ -142,19 +164,21 @@ void o_stream_ignore_last_errors(struct ostream *stream);
    When creating wrapper streams, they copy this behavior from the parent
    stream. */
 void o_stream_set_no_error_handling(struct ostream *stream, bool set);
-/* Send data from input stream. Returns number of bytes sent, or -1 if error
-   in either outstream or instream. Note that this function may block if either
-   instream or outstream is blocking.
+/* Send all of the instream to outstream.
 
-   Also note that this function may not add anything to the output buffer, so
-   if you want the flush callback to be called when more data can be written,
-   you'll need to call o_stream_set_flush_pending() manually.
+   On non-failure instream is skips over all data written to outstream.
+   This means that the number of bytes written to outstream is always equal to
+   the number of bytes skipped in instream.
 
    It's also possible to use this function to copy data within same file
-   descriptor. If the file must be grown, you have to do it manually before
-   calling this function. */
-off_t o_stream_send_istream(struct ostream *outstream,
-			    struct istream *instream);
+   descriptor, even if the source and destination overlaps. If the file must
+   be grown, you have to do it manually before calling this function. */
+enum ostream_send_istream_result
+o_stream_send_istream(struct ostream *outstream, struct istream *instream);
+/* Same as o_stream_send_istream(), but assume that reads and writes will
+   succeed. If not, o_stream_nfinish() will fail with the correct error
+   message (even istream's). */
+void o_stream_nsend_istream(struct ostream *outstream, struct istream *instream);
 
 /* Write data to specified offset. Returns 0 if successful, -1 if error. */
 int o_stream_pwrite(struct ostream *stream, const void *data, size_t size,

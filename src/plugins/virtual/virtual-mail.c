@@ -20,7 +20,7 @@ struct virtual_mail {
 	ARRAY(struct mail *) backend_mails;
 
 	/* mail is lost if backend_mail doesn't point to correct mail */
-	unsigned int cur_lost:1;
+	bool cur_lost:1;
 };
 
 struct mail *
@@ -53,6 +53,21 @@ virtual_mail_alloc(struct mailbox_transaction_context *t,
 
 	i_array_init(&vmail->backend_mails, array_count(&mbox->backend_boxes));
 	return &vmail->imail.mail.mail;
+}
+
+static void virtual_mail_close(struct mail *mail)
+{
+	struct virtual_mail *vmail = (struct virtual_mail *)mail;
+	struct mail **mails;
+	unsigned int i, count;
+
+	mails = array_get_modifiable(&vmail->backend_mails, &count);
+	for (i = 0; i < count; i++) {
+		struct mail_private *p = (struct mail_private *)mails[i];
+
+		p->v.close(mails[i]);
+	}
+	index_mail_close(mail);
 }
 
 static void virtual_mail_free(struct mail *mail)
@@ -468,26 +483,20 @@ static void virtual_mail_expunge(struct mail *mail)
 }
 
 static void
-virtual_mail_set_cache_corrupted_reason(struct mail *mail,
-					enum mail_fetch_field field,
-					const char *reason)
+virtual_mail_set_cache_corrupted(struct mail *mail,
+				 enum mail_fetch_field field,
+				 const char *reason)
 {
 	struct virtual_mail *vmail = (struct virtual_mail *)mail;
 	struct mail *backend_mail;
 
 	if (backend_mail_get(vmail, &backend_mail) < 0)
 		return;
-	mail_set_cache_corrupted_reason(backend_mail, field, reason);
-}
-
-static void
-virtual_mail_set_cache_corrupted(struct mail *mail, enum mail_fetch_field field)
-{
-	virtual_mail_set_cache_corrupted_reason(mail, field, "");
+	mail_set_cache_corrupted(backend_mail, field, reason);
 }
 
 struct mail_vfuncs virtual_mail_vfuncs = {
-	NULL,
+	virtual_mail_close,
 	virtual_mail_free,
 	virtual_mail_set_seq,
 	virtual_mail_set_uid,
@@ -522,5 +531,4 @@ struct mail_vfuncs virtual_mail_vfuncs = {
 	virtual_mail_expunge,
 	virtual_mail_set_cache_corrupted,
 	NULL,
-	virtual_mail_set_cache_corrupted_reason
 };

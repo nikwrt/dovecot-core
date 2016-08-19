@@ -38,7 +38,7 @@ test_timing_verify(const struct timing *t, const int64_t *input,
 			timing_get_median(t) <= copy[input_size/2],
 			input_size);
 	/* when we have 20 elements, [19] is the max, not the 95th %ile, so subtract 1 */
-	test_assert_idx(timing_get_95th(t) == copy[input_size*95/100 - !(input_size%20)],
+	test_assert_idx(timing_get_95th(t) == copy[input_size*95/100 - ((input_size%20) == 0 ? 1 : 0)],
 			input_size);
 
 	i_free(copy);
@@ -71,7 +71,25 @@ void test_timing(void)
 			timing_add_usecs(t, test_inputs[i][j]);
 			test_timing_verify(t, test_inputs[i], j+1);
 		}
+		timing_reset(t);
+		test_assert(timing_get_count(t) == 0);
+		test_assert(timing_get_max(t) == 0);
 		timing_deinit(&t);
 		test_end();
 	}
+
+	test_begin("timings large");
+	t = timing_init();
+	for (i = 0; i < 10000; i++)
+		timing_add_usecs(t, i);
+	test_assert(timing_get_count(t) == i);
+	test_assert(timing_get_sum(t) == (i-1)*i/2);
+	test_assert(timing_get_min(t) == 0);
+	test_assert(timing_get_max(t) == i-1);
+	test_assert(timing_get_avg(t) == i/2);
+	/* just test that these work: */
+	test_assert(timing_get_median(t) > 0 && timing_get_median(t) < i-1);
+	test_assert(timing_get_95th(t) > 0 && timing_get_95th(t) < i-1);
+	timing_deinit(&t);
+	test_end();
 }

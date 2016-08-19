@@ -49,6 +49,58 @@ static void test_array_foreach(void)
 	}
 	test_end();
 }
+static void test_array_foreach_elem_struct(void)
+{
+	ARRAY(struct foo) foos;
+	struct foo foo;
+	unsigned int i;
+
+	test_begin("array foreach_elem struct");
+	t_array_init(&foos, 32);
+	for (i = 0; i < 10; i++) {
+		foo.a = foo.b = foo.c = i;
+		array_append(&foos, &foo, 1);
+	}
+
+	i = 0;
+	array_foreach_elem(&foos, foo) {
+		test_assert_idx(foo.a == i, i);
+		test_assert_idx(foo.b == i, i);
+		test_assert_idx(foo.c == i, i);
+		i++;
+	}
+	test_end();
+}
+static void test_array_foreach_elem_string(void)
+{
+	ARRAY(char *) blurbs;
+	ARRAY(const char *) cblurbs;
+	char *string;
+	const char *cstring;
+	int i;
+
+	test_begin("array foreach_elem ro/rw strings");
+	t_array_init(&blurbs, 32);
+	t_array_init(&cblurbs, 32);
+	for (i = 0; i < 10; i++) {
+		cstring = t_strdup_printf("x%iy", i);
+		string = (char *)cstring;
+		array_append(&blurbs, &string, 1);
+		array_append(&cblurbs, &cstring, 1);
+	}
+
+	i = 0;
+	array_foreach_elem(&blurbs, string) {
+		test_assert_idx(string[0] == 'x' && string[1]-'0' == i && string[2] == 'y', i);
+		i++;
+	}
+	i = 0;
+	array_foreach_elem(&cblurbs, cstring) {
+		test_assert_idx(cstring[0] == 'x' && cstring[1]-'0' == i && cstring[2] == 'y', i);
+		i++;
+	}
+	test_end();
+}
 
 static void test_array_swap(void)
 {
@@ -143,10 +195,10 @@ static void test_array_cmp(void)
 		array_append(&arr2, &elems[i], 1);
 	}
 	array_append(&arr1, elems, NELEMS);
-	test_assert(array_cmp(&arr1, &arr2) == 1);
-	test_assert(array_equal_fn(&arr1, &arr2, test_compare_ushort) == 1);
+	test_assert(array_cmp(&arr1, &arr2) == TRUE);
+	test_assert(array_equal_fn(&arr1, &arr2, test_compare_ushort) == TRUE);
 	fuzz = 0;
-	test_assert(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == 1);
+	test_assert(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == TRUE);
 
 	for (i = 0; i < 256; i++) {
 		unsigned int j = rand() % NELEMS;
@@ -160,22 +212,22 @@ static void test_array_cmp(void)
 		fuzz = (int)tmp - (int)repl;
 		if (fuzz < 0)
 			fuzz = -fuzz;
-		test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == 1, i);
+		test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == TRUE, i);
 		if (fuzz > 0) {
 			fuzz--;
-			test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == 0, i);
+			test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == FALSE, i);
 		}
 		array_idx_set(&arr2, j, &tmp);
 		test_assert_idx(array_cmp(&arr1, &arr2) == TRUE, i);
-		test_assert_idx(array_equal_fn(&arr1, &arr2, test_compare_ushort) == 1, i);
+		test_assert_idx(array_equal_fn(&arr1, &arr2, test_compare_ushort) == TRUE, i);
 		fuzz = 0;
-		test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == 1, i);
+		test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == TRUE, i);
 	}
 	elems[NELEMS] = 0;
 	array_append(&arr2, &elems[NELEMS], 1);
-	test_assert(array_cmp(&arr1, &arr2) == 0);
-	test_assert(array_equal_fn(&arr1, &arr2, test_compare_ushort) == 0);
-	test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == 0, i);
+	test_assert(array_cmp(&arr1, &arr2) == FALSE);
+	test_assert(array_equal_fn(&arr1, &arr2, test_compare_ushort) == FALSE);
+	test_assert_idx(array_equal_fn_ctx(&arr1, &arr2, test_compare_ushort_fuzz, &fuzz) == FALSE, i);
 
 	test_end();
 }
@@ -199,8 +251,8 @@ static void test_array_cmp_str(void)
 		array_append(&arr2, &elemstrs[i], 1);
 	}
 	array_append(&arr1, elemstrs, NELEMS);
-	test_assert(array_cmp(&arr1, &arr2) == 1); /* pointers shared, so identical */
-	test_assert(array_equal_fn(&arr1, &arr2, test_compare_string) == 1); /* therefore value same */
+	test_assert(array_cmp(&arr1, &arr2) == TRUE); /* pointers shared, so identical */
+	test_assert(array_equal_fn(&arr1, &arr2, test_compare_string) == TRUE); /* therefore value same */
 	for (i = 0; i < 2560; i++) {
 		unsigned int j = rand() % NELEMS;
 		const char *const *ostr_p = array_idx(&arr2, j);
@@ -215,14 +267,14 @@ static void test_array_cmp_str(void)
 		if(rc == olen)
 			buf[rc+1] = '\0';
 		array_idx_set(&arr2, j, &bufp);
-		test_assert(array_cmp(&arr1, &arr2) == 0); /* pointers now differ */
+		test_assert(array_cmp(&arr1, &arr2) == FALSE); /* pointers now differ */
 		test_assert_idx(array_equal_fn(&arr1, &arr2, test_compare_string)
 				== (strcmp(ostr, buf) == 0), i); /* sometimes still the same */
 		test_assert_idx(array_equal_fn(&arr1, &arr2, test_compare_string)
 				== (ochar == buf[rc]), i); /* ditto */
 		array_idx_set(&arr2, j, &ostr);
-		test_assert(array_cmp(&arr1, &arr2) == 1); /* pointers now same again */
-		test_assert_idx(array_equal_fn(&arr1, &arr2, test_compare_string) == 1, i); /* duh! */
+		test_assert(array_cmp(&arr1, &arr2) == TRUE); /* pointers now same again */
+		test_assert_idx(array_equal_fn(&arr1, &arr2, test_compare_string) == TRUE, i); /* duh! */
 	}
 	/* length differences being detected are tested in other tests */
 	test_end();
@@ -232,6 +284,8 @@ void test_array(void)
 {
 	test_array_count();
 	test_array_foreach();
+	test_array_foreach_elem_struct();
+	test_array_foreach_elem_string();
 	test_array_reverse();
 	test_array_cmp();
 	test_array_cmp_str();

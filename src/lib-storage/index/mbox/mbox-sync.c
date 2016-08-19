@@ -46,6 +46,7 @@
 #include "mbox-storage.h"
 #include "index-sync-changes.h"
 #include "mailbox-uidvalidity.h"
+#include "mailbox-recent-flags.h"
 #include "mbox-from.h"
 #include "mbox-file.h"
 #include "mbox-lock.h"
@@ -436,7 +437,7 @@ static void mbox_sync_update_index(struct mbox_sync_mail_context *mail_ctx,
 					MODIFY_REPLACE, mbox_flags);
 		mbox_sync_update_index_keywords(mail_ctx);
 
-		if (sync_ctx->mbox->mbox_save_md5 != 0) {
+		if (sync_ctx->mbox->mbox_save_md5) {
 			mail_index_update_ext(sync_ctx->t, sync_ctx->idx_seq,
 				sync_ctx->mbox->md5hdr_ext_idx,
 				mail_ctx->hdr_md5_sum, NULL);
@@ -466,7 +467,7 @@ static void mbox_sync_update_index(struct mbox_sync_mail_context *mail_ctx,
 			mbox_sync_update_index_keywords(mail_ctx);
 
 		/* see if we need to update md5 sum. */
-		if (sync_ctx->mbox->mbox_save_md5 != 0)
+		if (sync_ctx->mbox->mbox_save_md5)
 			mbox_sync_update_md5_if_changed(mail_ctx);
 	}
 
@@ -965,7 +966,7 @@ static int mbox_sync_partial_seek_next(struct mbox_sync_context *sync_ctx,
 	} else {
 		/* if there's no sync records left, we can stop. except if
 		   this is a dirty sync, check if there are new messages. */
-		if (!sync_ctx->mbox->mbox_hdr.dirty_flag)
+		if (sync_ctx->mbox->mbox_hdr.dirty_flag == 0)
 			return 0;
 
 		messages_count =
@@ -1059,7 +1060,7 @@ static int mbox_sync_loop(struct mbox_sync_context *sync_ctx,
 
 		if (mail_ctx->seq == 1) {
 			if (mbox_sync_imapbase(sync_ctx, mail_ctx)) {
-				sync_ctx->mbox->mbox_hdr.dirty_flag = TRUE;
+				sync_ctx->mbox->mbox_hdr.dirty_flag = 1;
 				return 0;
 			}
 		}
@@ -1067,13 +1068,13 @@ static int mbox_sync_loop(struct mbox_sync_context *sync_ctx,
 		if (mail_ctx->mail.uid_broken && partial) {
 			/* UID ordering problems, resync everything to make
 			   sure we get everything right */
-			if (sync_ctx->mbox->mbox_hdr.dirty_flag)
+			if (sync_ctx->mbox->mbox_hdr.dirty_flag != 0)
 				return 0;
 
 			mbox_sync_set_critical(sync_ctx,
 				"UIDs broken with partial sync");
 
-			sync_ctx->mbox->mbox_hdr.dirty_flag = TRUE;
+			sync_ctx->mbox->mbox_hdr.dirty_flag = 1;
 			return 0;
 		}
 		if (mail_ctx->mail.uid_broken)
@@ -1212,14 +1213,14 @@ static int mbox_sync_loop(struct mbox_sync_context *sync_ctx,
 	}
 
 	if (!skipped_mails)
-		sync_ctx->mbox->mbox_hdr.dirty_flag = FALSE;
+		sync_ctx->mbox->mbox_hdr.dirty_flag = 0;
 	sync_ctx->mbox->mbox_broken_offsets = FALSE;
 
 	if (uids_broken && sync_ctx->delay_writes) {
 		/* once we get around to writing the changes, we'll need to do
 		   a full sync to avoid the "UIDs broken in partial sync"
 		   error */
-		sync_ctx->mbox->mbox_hdr.dirty_flag = TRUE;
+		sync_ctx->mbox->mbox_hdr.dirty_flag = 1;
 	}
 	return 1;
 }
@@ -1599,7 +1600,8 @@ static int mbox_sync_do(struct mbox_sync_context *sync_ctx,
 	struct mbox_sync_mail_context mail_ctx;
 	const struct stat *st;
 	unsigned int i;
-	int ret, partial;
+	bool partial;
+	int ret;
 
 	if (i_stream_stat(sync_ctx->file_input, FALSE, &st) < 0) {
 		mbox_set_syscall_error(sync_ctx->mbox, "i_stream_stat()");
@@ -1613,11 +1615,11 @@ static int mbox_sync_do(struct mbox_sync_context *sync_ctx,
 	if ((flags & MBOX_SYNC_FORCE_SYNC) != 0) {
 		/* forcing a full sync. assume file has changed. */
 		partial = FALSE;
-		mbox_hdr->dirty_flag = TRUE;
+		mbox_hdr->dirty_flag = 1;
 	} else if ((uint32_t)st->st_mtime == mbox_hdr->sync_mtime &&
 		   (uint64_t)st->st_size == mbox_hdr->sync_size) {
 		/* file is fully synced */
-		if (mbox_hdr->dirty_flag && (flags & MBOX_SYNC_UNDIRTY) != 0)
+		if (mbox_hdr->dirty_flag != 0 && (flags & MBOX_SYNC_UNDIRTY) != 0)
 			partial = FALSE;
 		else
 			partial = TRUE;
@@ -1628,13 +1630,13 @@ static int mbox_sync_do(struct mbox_sync_context *sync_ctx,
 		   likely means that someone had modified some header
 		   and we probably want to know about it */
 		partial = FALSE;
-		sync_ctx->mbox->mbox_hdr.dirty_flag = TRUE;
+		sync_ctx->mbox->mbox_hdr.dirty_flag = 1;
 	} else {
 		/* see if we can delay syncing the whole file.
 		   normally we only notice expunges and appends
 		   in partial syncing. */
 		partial = TRUE;
-		sync_ctx->mbox->mbox_hdr.dirty_flag = TRUE;
+		sync_ctx->mbox->mbox_hdr.dirty_flag = 1;
 	}
 
 	mbox_sync_restart(sync_ctx);
@@ -1705,7 +1707,7 @@ int mbox_sync_header_refresh(struct mbox_mailbox *mbox)
 
 	memcpy(&mbox->mbox_hdr, data, I_MIN(sizeof(mbox->mbox_hdr), data_size));
 	if (mbox->mbox_broken_offsets)
-		mbox->mbox_hdr.dirty_flag = TRUE;
+		mbox->mbox_hdr.dirty_flag = 1;
 	return 0;
 }
 
@@ -1776,7 +1778,7 @@ int mbox_sync_has_changed_full(struct mbox_mailbox *mbox, bool leave_dirty,
 	if ((uint32_t)st->st_mtime == mbox->mbox_hdr.sync_mtime &&
 	    (uint64_t)st->st_size == mbox->mbox_hdr.sync_size) {
 		/* fully synced */
-		if (!mbox->mbox_hdr.dirty_flag || leave_dirty)
+		if (mbox->mbox_hdr.dirty_flag != 0 || leave_dirty)
 			return 0;
 		/* flushing dirtyness */
 	}
@@ -1806,8 +1808,8 @@ static int mbox_sync_int(struct mbox_mailbox *mbox, enum mbox_sync_flags flags,
 	struct mail_index_transaction *trans;
 	struct mbox_sync_context sync_ctx;
 	enum mail_index_sync_flags sync_flags;
-	int ret, changed;
-	bool delay_writes, readonly;
+	int ret;
+	bool changed, delay_writes, readonly;
 
 	readonly = mbox_is_backend_readonly(mbox) ||
 		(flags & MBOX_SYNC_READONLY) != 0;
@@ -1828,11 +1830,12 @@ static int mbox_sync_int(struct mbox_mailbox *mbox, enum mbox_sync_flags flags,
 	    (flags & MBOX_SYNC_FORCE_SYNC) != 0) {
 		if (mbox_sync_header_refresh(mbox) < 0)
 			return -1;
-		changed = 1;
+		changed = TRUE;
 	} else {
 		bool leave_dirty = (flags & MBOX_SYNC_UNDIRTY) == 0;
-		if ((changed = mbox_sync_has_changed(mbox, leave_dirty)) < 0)
+		if ((ret = mbox_sync_has_changed(mbox, leave_dirty)) < 0)
 			return -1;
+		changed = ret > 0;
 	}
 
 	if ((flags & MBOX_SYNC_LOCK_READING) != 0) {
@@ -1886,7 +1889,7 @@ again:
 		/* see if we need to drop recent flags */
 		sync_ctx.hdr = mail_index_get_header(sync_view);
 		if (sync_ctx.hdr->first_recent_uid < sync_ctx.hdr->next_uid)
-			changed = 1;
+			changed = TRUE;
 	}
 
 	if (!changed && !mail_index_sync_have_more(index_sync_ctx)) {
@@ -1952,7 +1955,7 @@ again:
 		/* ok, we have something to do but no locks. we'll have to
 		   restart syncing to avoid deadlocking. */
 		mbox_sync_context_free(&sync_ctx);
-		changed = 1;
+		changed = TRUE;
 		goto again;
 	}
 

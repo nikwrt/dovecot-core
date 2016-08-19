@@ -69,8 +69,8 @@ mdbox_file_read_metadata_hdr(struct dbox_file *file,
 	size_t size;
 	int ret;
 
-	ret = i_stream_read_data(file->input, &data, &size,
-				 sizeof(*meta_hdr_r));
+	ret = i_stream_read_bytes(file->input, &data, &size,
+				  sizeof(*meta_hdr_r));
 	if (ret <= 0) {
 		i_assert(ret == -1);
 		if (file->input->stream_errno == 0) {
@@ -78,7 +78,8 @@ mdbox_file_read_metadata_hdr(struct dbox_file *file,
 			return 0;
 		}
 		mail_storage_set_critical(&file->storage->storage,
-			"read(%s) failed: %m", file->cur_path);
+			"read(%s) failed: %s", file->cur_path,
+			i_stream_get_error(file->input));
 		return -1;
 	}
 
@@ -170,8 +171,7 @@ mdbox_purge_want_altpath(struct mdbox_purge_context *ctx,
 	enum mdbox_msg_action action;
 	void *value;
 
-	if (dbox_file_is_in_alt(file) &&
-	    ctx->storage->set->mdbox_purge_preserve_alt)
+	if (dbox_file_is_in_alt(file))
 		return TRUE;
 
 	if (!ctx->have_altmoves)
@@ -191,8 +191,7 @@ mdbox_purge_save_msg(struct mdbox_purge_context *ctx, struct dbox_file *file,
 	struct ostream *output;
 	enum mdbox_map_append_flags append_flags;
 	uoff_t msg_size;
-	off_t ret;
-	int read_errno;
+	int ret;
 
 	if (ctx->append_ctx == NULL)
 		ctx->append_ctx = mdbox_map_append_begin(ctx->atomic);
@@ -207,36 +206,32 @@ mdbox_purge_save_msg(struct mdbox_purge_context *ctx, struct dbox_file *file,
 	i_assert(file != out_file_append->file);
 
 	input = i_stream_create_limit(file->input, msg_size);
-	ret = o_stream_send_istream(output, input);
-	read_errno = input->stream_errno;
-	i_stream_unref(&input);
-
-	if (read_errno != 0) {
-		errno = read_errno;
-		mail_storage_set_critical(&file->storage->storage,
-			"read(%s) failed: %m", file->cur_path);
-		return -1;
-	}
+	o_stream_nsend_istream(output, input);
 	if (o_stream_nfinish(output) < 0) {
 		mail_storage_set_critical(&file->storage->storage,
-					  "write(%s) failed: %m",
-					  out_file_append->file->cur_path);
-		return -1;
-	}
-	if (ret != (off_t)msg_size) {
-		i_assert(ret < (off_t)msg_size);
+					  "write(%s) failed: %s",
+					  out_file_append->file->cur_path,
+					  o_stream_get_error(output));
+		ret = -1;
+	} else if (input->v_offset != msg_size) {
+		i_assert(input->v_offset < msg_size);
 		i_assert(i_stream_is_eof(file->input));
 
 		dbox_file_set_corrupted(file, "truncated message at EOF");
-		return 0;
+		ret = 0;
+	} else {
+		ret = 1;
 	}
+	i_stream_unref(&input);
 
-	/* copy metadata */
-	if ((ret = mdbox_file_metadata_copy(file, output)) <= 0)
-		return ret;
+	if (ret > 0) {
+		/* copy metadata */
+		if ((ret = mdbox_file_metadata_copy(file, output)) <= 0)
+			return ret;
 
-	mdbox_map_append_finish(ctx->append_ctx);
-	return 1;
+		mdbox_map_append_finish(ctx->append_ctx);
+	}
+	return ret;
 }
 
 static int
@@ -640,7 +635,7 @@ static int mdbox_altmove_add_files(struct mdbox_purge_context *ctx)
 		}
 
 		action = MDBOX_MSG_ACTION_MOVE_FROM_ALT;
-		hash_table_insert(ctx->altmoves, POINTER_CAST(cur_map_uid),
+		hash_table_update(ctx->altmoves, POINTER_CAST(cur_map_uid),
 				  POINTER_CAST(action));
 		seq_range_array_add(&ctx->purge_file_ids, cur_rec.file_id);
 	}

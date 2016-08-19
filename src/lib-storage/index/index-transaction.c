@@ -5,6 +5,7 @@
 #include "dict.h"
 #include "index-storage.h"
 #include "index-sync-private.h"
+#include "index-pop3-uidl.h"
 #include "index-mail.h"
 
 static void index_transaction_free(struct mailbox_transaction_context *t)
@@ -26,20 +27,24 @@ index_transaction_index_commit(struct mail_index_transaction *index_trans,
 	struct mailbox_transaction_context *t =
 		MAIL_STORAGE_CONTEXT(index_trans);
 	struct index_mailbox_sync_pvt_context *pvt_sync_ctx = NULL;
+	const char *error;
 	int ret = 0;
 
+	index_pop3_uidl_update_exists_finish(t);
 	if (t->nontransactional_changes)
 		t->changes->changed = TRUE;
 
 	if (t->attr_pvt_trans != NULL) {
-		if (dict_transaction_commit(&t->attr_pvt_trans) < 0) {
-			mail_storage_set_internal_error(t->box->storage);
+		if (dict_transaction_commit(&t->attr_pvt_trans, &error) < 0) {
+			mail_storage_set_critical(t->box->storage,
+				"Dict private transaction commit failed: %s", error);
 			ret = -1;
 		}
 	}
 	if (t->attr_shared_trans != NULL) {
-		if (dict_transaction_commit(&t->attr_shared_trans) < 0) {
-			mail_storage_set_internal_error(t->box->storage);
+		if (dict_transaction_commit(&t->attr_shared_trans, &error) < 0) {
+			mail_storage_set_critical(t->box->storage,
+				"Dict shared transaction commit failed: %s", error);
 			ret = -1;
 		}
 	}

@@ -107,11 +107,13 @@ fts_tika_parser_response(const struct http_response *response,
 		/* Server Error - the problem could be anything (in Tika or
 		   HTTP server or proxy) and might be retriable, but Tika has
 		   trouble processing some documents and throws up this error
-		   every time for those documents. So we try retrying this a
-		   couple of times, but if that doesn't work we'll just ignore
-		   it. */
-		if (http_client_request_try_retry(parser->http_req))
-			return;
+		   every time for those documents.
+
+		   Unfortunately we can't easily re-send the request here,
+		   because we would have to re-send the entire payload, which
+		   isn't available anymore here. So we'd need to indicate
+		   in fts_parser_deinit() that we want to retry.
+		   FIXME: do this in v2.3. For now we'll just ignore it. */
 		i_info("fts_tika: PUT %s failed: %u %s - ignoring",
 		       mail_user_plugin_getenv(parser->user, "fts_tika"),
 		       response->status, response->reason);
@@ -145,7 +147,7 @@ fts_parser_tika_try_init(struct mail_user *user, const char *content_type,
 	parser->user = user;
 
 	http_req = http_client_request(tika_http_client, "PUT",
-			http_url->host_name,
+			http_url->host.name,
 			t_strconcat(http_url->path, http_url->enc_query, NULL),
 			fts_tika_parser_response, parser);
 	http_client_request_set_port(http_req, http_url->port);
@@ -192,7 +194,7 @@ static void fts_parser_tika_more(struct fts_parser *_parser,
 	}
 	/* continue returning data from Tika. we'll create a new ioloop just
 	   for reading this one payload. */
-	while ((ret = i_stream_read_data(parser->payload, &data, &size, 0)) == 0) {
+	while ((ret = i_stream_read_more(parser->payload, &data, &size)) == 0) {
 		if (parser->failed)
 			break;
 		/* wait for more input from Tika */

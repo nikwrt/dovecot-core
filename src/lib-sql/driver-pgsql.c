@@ -35,7 +35,7 @@ struct pgsql_db {
 	char *error;
 	const char *connect_state;
 
-	unsigned int fatal_error:1;
+	bool fatal_error:1;
 };
 
 struct pgsql_binary_value {
@@ -58,7 +58,7 @@ struct pgsql_result {
 	sql_query_callback_t *callback;
 	void *context;
 
-	unsigned int timeout:1;
+	bool timeout:1;
 };
 
 struct pgsql_transaction_context {
@@ -71,7 +71,7 @@ struct pgsql_transaction_context {
 	pool_t query_pool;
 	const char *error;
 
-	unsigned int failed:1;
+	bool failed:1;
 };
 
 extern const struct sql_db driver_pgsql_db;
@@ -321,8 +321,8 @@ static void consume_results(struct pgsql_db *db)
 
 	driver_pgsql_stop_io(db);
 
-	while (PQconsumeInput(db->pg)) {
-		if (PQisBusy(db->pg)) {
+	while (PQconsumeInput(db->pg) != 0) {
+		if (PQisBusy(db->pg) != 0) {
 			db->io = io_add(PQsocket(db->pg), IO_READ,
 					consume_results, db);
 			db->io_dir = IO_READ;
@@ -423,12 +423,12 @@ static void get_result(struct pgsql_result *result)
 
 	driver_pgsql_stop_io(db);
 
-	if (!PQconsumeInput(db->pg)) {
+	if (PQconsumeInput(db->pg) == 0) {
 		result_finish(result);
 		return;
 	}
 
-	if (PQisBusy(db->pg)) {
+	if (PQisBusy(db->pg) != 0) {
 		db->io = io_add(PQsocket(db->pg), IO_READ,
 				get_result, result);
 		db->io_dir = IO_READ;
@@ -487,7 +487,7 @@ static void do_query(struct pgsql_result *result, const char *query)
 	result->to = timeout_add(SQL_QUERY_TIMEOUT_SECS * 1000,
 				 query_timeout, result);
 
-	if (!PQsendQuery(db->pg, query) ||
+	if (PQsendQuery(db->pg, query) == 0 ||
 	    (ret = PQflush(db->pg)) < 0) {
 		/* failed to send query */
 		result_finish(result);
@@ -688,7 +688,7 @@ static int driver_pgsql_result_next_row(struct sql_result *_result)
 		return 0;
 	case PGRES_TUPLES_OK:
 		result->rows = PQntuples(result->pgres);
-		return result->rows > 0;
+		return result->rows > 0 ? 1 : 0;
 	case PGRES_EMPTY_QUERY:
 	case PGRES_NONFATAL_ERROR:
 		/* nonfatal error */
@@ -755,7 +755,7 @@ driver_pgsql_result_get_field_value(struct sql_result *_result,
 {
 	struct pgsql_result *result = (struct pgsql_result *)_result;
 
-	if (PQgetisnull(result->pgres, result->rownum, idx))
+	if (PQgetisnull(result->pgres, result->rownum, idx) != 0)
 		return NULL;
 
 	return PQgetvalue(result->pgres, result->rownum, idx);
@@ -769,7 +769,7 @@ driver_pgsql_result_get_field_value_binary(struct sql_result *_result,
 	const char *value;
 	struct pgsql_binary_value *binary_value;
 
-	if (PQgetisnull(result->pgres, result->rownum, idx)) {
+	if (PQgetisnull(result->pgres, result->rownum, idx) != 0) {
 		*size_r = 0;
 		return NULL;
 	}
@@ -873,10 +873,14 @@ static void
 transaction_commit_callback(struct sql_result *result,
 			    struct pgsql_transaction_context *ctx)
 {
-	if (sql_result_next_row(result) < 0)
-		ctx->callback(sql_result_get_error(result), ctx->context);
-	else
-		ctx->callback(NULL, ctx->context);
+	struct sql_commit_result commit_result;
+
+	memset(&commit_result, 0, sizeof(result));
+	if (sql_result_next_row(result) < 0) {
+		commit_result.error = sql_result_get_error(result);
+		commit_result.error_type = sql_result_get_error_type(result);
+	}
+	ctx->callback(&commit_result, ctx->context);
 	driver_pgsql_transaction_free(ctx);
 }
 
@@ -890,7 +894,10 @@ static bool transaction_send_next(void *context)
 		/* kludgy.. */
 		ctx->ctx.db->state = SQL_DB_STATE_IDLE;
 	} else if (!SQL_DB_IS_READY(ctx->ctx.db)) {
-		ctx->callback("Not connected", ctx->context);
+		struct sql_commit_result commit_result = {
+			.error = "Not connected"
+		};
+		ctx->callback(&commit_result, ctx->context);
 		return FALSE;
 	}
 
@@ -908,6 +915,19 @@ static bool transaction_send_next(void *context)
 }
 
 static void
+transaction_commit_error_callback(struct pgsql_transaction_context *ctx,
+				  struct sql_result *result)
+{
+	struct sql_commit_result commit_result;
+
+	memset(&commit_result, 0, sizeof(result));
+	commit_result.error = sql_result_get_error(result);
+	commit_result.error_type = sql_result_get_error_type(result);
+
+	ctx->callback(&commit_result, ctx->context);
+}
+
+static void
 transaction_begin_callback(struct sql_result *result,
 			   struct pgsql_transaction_context *ctx)
 {
@@ -916,7 +936,7 @@ transaction_begin_callback(struct sql_result *result,
 	i_assert(result->db == ctx->ctx.db);
 
 	if (sql_result_next_row(result) < 0) {
-		ctx->callback(sql_result_get_error(result), ctx->context);
+		transaction_commit_error_callback(ctx, result);
 		driver_pgsql_transaction_free(ctx);
 		return;
 	}
@@ -934,7 +954,7 @@ transaction_update_callback(struct sql_result *result,
 	struct pgsql_db *db = (struct pgsql_db *)result->db;
 
 	if (sql_result_next_row(result) < 0) {
-		ctx->callback(sql_result_get_error(result), ctx->context);
+		transaction_commit_error_callback(ctx, result);
 		driver_pgsql_transaction_free(ctx);
 		return;
 	}
@@ -957,9 +977,10 @@ transaction_trans_query_callback(struct sql_result *result,
 {
 	struct pgsql_transaction_context *ctx =
 		(struct pgsql_transaction_context *)query->trans;
+	struct sql_commit_result commit_result;
 
 	if (sql_result_next_row(result) < 0) {
-		ctx->callback(sql_result_get_error(result), ctx->context);
+		transaction_commit_error_callback(ctx, result);
 		driver_pgsql_transaction_free(ctx);
 		return;
 	}
@@ -971,7 +992,8 @@ transaction_trans_query_callback(struct sql_result *result,
 				query->affected_rows) < 0)
 			i_unreached();
 	}
-	ctx->callback(NULL, ctx->context);
+	memset(&commit_result, 0, sizeof(result));
+	ctx->callback(&commit_result, ctx->context);
 	driver_pgsql_transaction_free(ctx);
 }
 
@@ -981,12 +1003,16 @@ driver_pgsql_transaction_commit(struct sql_transaction_context *_ctx,
 {
 	struct pgsql_transaction_context *ctx =
 		(struct pgsql_transaction_context *)_ctx;
+	struct sql_commit_result result;
 
+	memset(&result, 0, sizeof(result));
 	ctx->callback = callback;
 	ctx->context = context;
 
 	if (ctx->failed || _ctx->head == NULL) {
-		callback(ctx->failed ? ctx->error : NULL, context);
+		if (ctx->failed)
+			result.error = ctx->error;
+		callback(&result, context);
 		driver_pgsql_transaction_free(ctx);
 	} else if (_ctx->head->next == NULL) {
 		/* just a single query, send it */

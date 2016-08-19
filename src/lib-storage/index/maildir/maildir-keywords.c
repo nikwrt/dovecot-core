@@ -36,8 +36,8 @@ struct maildir_keywords {
         struct dotlock_settings dotlock_settings;
 
 	time_t synced_mtime;
-	unsigned int synced:1;
-	unsigned int changed:1;
+	bool synced:1;
+	bool changed:1;
 };
 
 struct maildir_keywords_sync_ctx {
@@ -157,7 +157,7 @@ static int maildir_keywords_sync(struct maildir_keywords *mk)
 	}
 
 	maildir_keywords_clear(mk);
-	input = i_stream_create_fd(fd, 1024, FALSE);
+	input = i_stream_create_fd(fd, 1024);
 	while ((line = i_stream_read_next_line(input)) != NULL) {
 		p = strchr(line, ' ');
 		if (p == NULL) {
@@ -168,7 +168,8 @@ static int maildir_keywords_sync(struct maildir_keywords *mk)
 		*p++ = '\0';
 
 		if (str_to_uint(line, &idx) < 0 ||
-		    idx >= MAILDIR_MAX_KEYWORDS || *p == '\0') {
+		    idx >= MAILDIR_MAX_KEYWORDS || *p == '\0' ||
+		    hash_table_lookup(mk->hash, p) != NULL) {
 			/* shouldn't happen */
 			continue;
 		}

@@ -55,12 +55,12 @@ struct solr_fts_backend_update_context {
 	uint32_t last_indexed_uid;
 	unsigned int mails_since_flush;
 
-	unsigned int tokenized_input:1;
-	unsigned int last_indexed_uid_set:1;
-	unsigned int body_open:1;
-	unsigned int documents_added:1;
-	unsigned int expunges:1;
-	unsigned int truncate_header:1;
+	bool tokenized_input:1;
+	bool last_indexed_uid_set:1;
+	bool body_open:1;
+	bool documents_added:1;
+	bool expunges:1;
+	bool truncate_header:1;
 };
 
 static const char *solr_escape_chars = "+-&|!(){}[]^\"~*?:\\/ ";
@@ -664,6 +664,8 @@ static void solr_add_str_arg(string_t *str, struct mail_search_arg *arg)
 static bool
 solr_add_definite_query(string_t *str, struct mail_search_arg *arg)
 {
+	if (arg->no_fts)
+		return FALSE;
 	switch (arg->type) {
 	case SEARCH_TEXT: {
 		if (arg->match_not)
@@ -726,6 +728,8 @@ solr_add_definite_query_args(string_t *str, struct mail_search_arg *arg,
 static bool
 solr_add_maybe_query(string_t *str, struct mail_search_arg *arg)
 {
+	if (arg->no_fts)
+		return FALSE;
 	switch (arg->type) {
 	case SEARCH_HEADER:
 	case SEARCH_HEADER_ADDRESS:
@@ -871,7 +875,7 @@ solr_search_multi(struct fts_backend *_backend, string_t *str,
 	for (i = 0; boxes[i] != NULL; i++) ;
 	search_all_mailboxes = i > SOLR_QUERY_MAX_MAILBOX_COUNT;
 	if (!search_all_mailboxes)
-		str_append(str, "%2B(");
+		str_append(str, "+%2B(");
 	len = str_len(str);
 
 	for (i = 0; boxes[i] != NULL; i++) {

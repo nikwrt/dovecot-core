@@ -47,7 +47,7 @@ struct http_transfer_chunked_istream {
 
 	struct http_header_parser *header_parser;
 
-	unsigned int finished:1;
+	bool finished:1;
 };
 
 /* Chunk parser */
@@ -311,8 +311,7 @@ static int http_transfer_chunked_parse_next(
 	size_t size;
 	int ret;
 
-	while ((ret=i_stream_read_data
-		(input, &tcstream->begin, &size, 0)) > 0) {
+	while ((ret=i_stream_read_more(input, &tcstream->begin, &size)) > 0) {
 		tcstream->cur = tcstream->begin;
 		tcstream->end = tcstream->cur + size;
 
@@ -497,8 +496,6 @@ http_transfer_chunked_istream_destroy(struct iostream_private *stream)
 
 	// FIXME: copied from istream.c; there's got to be a better way.
 	i_free(tcstream->istream.w_buffer);
-	if (tcstream->istream.parent != NULL)
-		i_stream_unref(&tcstream->istream.parent);
 }
 
 struct istream *
@@ -536,7 +533,7 @@ struct http_transfer_chunked_ostream {
 
 	size_t chunk_size, chunk_pos;
 
-	unsigned int chunk_active:1;
+	bool chunk_active:1;
 };
 
 static size_t _log16(size_t in)
@@ -626,7 +623,7 @@ http_transfer_chunked_ostream_sendv(struct ostream_private *stream,
 	/* create new iovec */
 	prefix = t_strdup_printf("%llx\r\n", (unsigned long long)tcstream->chunk_size);
 	iov_count = iov_count_new + 2;
-	iov_new = t_malloc(sizeof(struct const_iovec) * iov_count);
+	iov_new = t_new(struct const_iovec, iov_count);
 	iov_new[0].iov_base = prefix;
 	iov_new[0].iov_len = strlen(prefix);
 	memcpy(&iov_new[1], iov, sizeof(struct const_iovec) * iov_count_new);

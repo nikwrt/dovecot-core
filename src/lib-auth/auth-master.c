@@ -43,9 +43,9 @@ struct auth_master_connection {
 			       void *context);
 	void *reply_context;
 
-	unsigned int sent_handshake:1;
-	unsigned int handshaked:1;
-	unsigned int aborted:1;
+	bool sent_handshake:1;
+	bool handshaked:1;
+	bool aborted:1;
 };
 
 struct auth_master_lookup_ctx {
@@ -209,7 +209,7 @@ static bool auth_lookup_reply_callback(const char *cmd, const char *const *args,
 	if (ctx->return_value >= 0) {
 		ctx->fields = p_new(ctx->pool, const char *, len + 1);
 		for (i = 0; i < len; i++)
-			ctx->fields[i] = p_strdup(ctx->pool, args[i]);
+			ctx->fields[i] = str_tabunescape(p_strdup(ctx->pool, args[i]));
 	} else {
 		/* put the reason string into first field */
 		ctx->fields = p_new(ctx->pool, const char *, 2);
@@ -342,8 +342,8 @@ static void auth_master_set_io(struct auth_master_connection *conn)
 
 	conn->prev_ioloop = current_ioloop;
 	conn->ioloop = io_loop_create();
-	conn->input = i_stream_create_fd(conn->fd, MAX_INBUF_SIZE, FALSE);
-	conn->output = o_stream_create_fd(conn->fd, MAX_OUTBUF_SIZE, FALSE);
+	conn->input = i_stream_create_fd(conn->fd, MAX_INBUF_SIZE);
+	conn->output = o_stream_create_fd(conn->fd, MAX_OUTBUF_SIZE);
 	conn->io = io_add(conn->fd, IO_READ, auth_input, conn);
 	conn->to = timeout_add(1000*MASTER_AUTH_LOOKUP_TIMEOUT_SECS,
 			       auth_request_timeout, conn);
@@ -413,7 +413,8 @@ static int auth_master_run_cmd_pre(struct auth_master_connection *conn,
 	o_stream_uncork(conn->output);
 
 	if (o_stream_nfinish(conn->output) < 0) {
-		i_error("write(auth socket) failed: %m");
+		i_error("write(auth socket) failed: %s",
+			o_stream_get_error(conn->output));
 		auth_master_unset_io(conn);
 		auth_connection_close(conn);
 		return -1;
@@ -698,7 +699,8 @@ auth_master_user_list_init(struct auth_master_connection *conn,
 
 	if (auth_master_run_cmd_pre(conn, str_c(str)) < 0)
 		ctx->failed = TRUE;
-	io_loop_set_current(conn->prev_ioloop);
+	if (conn->prev_ioloop != NULL)
+		io_loop_set_current(conn->prev_ioloop);
 	conn->prefix = DEFAULT_USERDB_LOOKUP_PREFIX;
 	return ctx;
 }

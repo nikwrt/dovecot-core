@@ -17,6 +17,7 @@
 #include "maildir-filename.h"
 #include "maildir-filename-flags.h"
 #include "maildir-sync.h"
+#include "mailbox-recent-flags.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -34,7 +35,7 @@ struct maildir_filename {
 	uoff_t size, vsize;
 	enum mail_flags flags;
 	unsigned int pop3_order;
-	unsigned int preserve_filename:1;
+	bool preserve_filename:1;
 	unsigned int keywords_count;
 	/* unsigned int keywords[]; */
 };
@@ -61,12 +62,12 @@ struct maildir_save_context {
 	int fd;
 	uint32_t first_seq, seq, last_nonrecent_uid;
 
-	unsigned int have_keywords:1;
-	unsigned int have_preserved_filenames:1;
-	unsigned int locked:1;
-	unsigned int failed:1;
-	unsigned int last_save_finished:1;
-	unsigned int locked_uidlist_refresh:1;
+	bool have_keywords:1;
+	bool have_preserved_filenames:1;
+	bool locked:1;
+	bool failed:1;
+	bool last_save_finished:1;
+	bool locked_uidlist_refresh:1;
 };
 
 static int maildir_file_move(struct maildir_save_context *ctx,
@@ -440,6 +441,8 @@ int maildir_save_begin(struct mail_save_context *_ctx, struct istream *input)
 
 	if (!ctx->failed) {
 		_ctx->data.output = o_stream_create_fd_file(ctx->fd, 0, FALSE);
+		o_stream_set_name(_ctx->data.output, t_strdup_printf(
+			"%s/%s", ctx->tmpdir, ctx->file_last->tmp_name));
 		o_stream_cork(_ctx->data.output);
 		ctx->last_save_finished = FALSE;
 	}
@@ -449,29 +452,15 @@ int maildir_save_begin(struct mail_save_context *_ctx, struct istream *input)
 int maildir_save_continue(struct mail_save_context *_ctx)
 {
 	struct maildir_save_context *ctx = (struct maildir_save_context *)_ctx;
-	struct mail_storage *storage = &ctx->mbox->storage->storage;
 
 	if (ctx->failed)
 		return -1;
 
-	do {
-		if (o_stream_send_istream(_ctx->data.output, ctx->input) < 0) {
-			if (!mail_storage_set_error_from_errno(storage)) {
-				mail_storage_set_critical(storage,
-					"o_stream_send_istream(%s/%s) "
-					"failed: %m",
-					ctx->tmpdir, ctx->file_last->tmp_name);
-			}
-			ctx->failed = TRUE;
-			return -1;
-		}
-		if (ctx->cur_dest_mail != NULL)
-			index_mail_cache_parse_continue(ctx->cur_dest_mail);
-
-		/* both tee input readers may consume data from our primary
-		   input stream. we'll have to make sure we don't return with
-		   one of the streams still having data in them. */
-	} while (i_stream_read(ctx->input) > 0);
+	if (index_storage_save_continue(_ctx, ctx->input,
+					ctx->cur_dest_mail) < 0) {
+		ctx->failed = TRUE;
+		return -1;
+	}
 	return 0;
 }
 
@@ -536,7 +525,7 @@ static int maildir_save_finish_real(struct mail_save_context *_ctx)
 {
 	struct maildir_save_context *ctx = (struct maildir_save_context *)_ctx;
 	struct mail_storage *storage = &ctx->mbox->storage->storage;
-	const char *path;
+	const char *path, *output_errstr;
 	off_t real_size;
 	uoff_t size;
 	int output_errno;
@@ -551,7 +540,8 @@ static int maildir_save_finish_real(struct mail_save_context *_ctx)
 	if (!ctx->failed && o_stream_nfinish(_ctx->data.output) < 0) {
 		if (!mail_storage_set_error_from_errno(storage)) {
 			mail_storage_set_critical(storage,
-				"write(%s) failed: %m", path);
+				"write(%s) failed: %s", path,
+				o_stream_get_error(_ctx->data.output));
 		}
 		ctx->failed = TRUE;
 	}
@@ -581,7 +571,8 @@ static int maildir_save_finish_real(struct mail_save_context *_ctx)
 				  &ctx->file_last->vsize) < 0)
 		ctx->file_last->vsize = (uoff_t)-1;
 
-	output_errno = _ctx->data.output->last_failed_errno;
+	output_errno = _ctx->data.output->stream_errno;
+	output_errstr = t_strdup(o_stream_get_error(_ctx->data.output));
 	o_stream_destroy(&_ctx->data.output);
 
 	if (storage->set->parsed_fsync_mode != FSYNC_MODE_NEVER &&
@@ -625,13 +616,12 @@ static int maildir_save_finish_real(struct mail_save_context *_ctx)
 		/* delete the tmp file */
 		i_unlink_if_exists(path);
 
-		errno = output_errno;
-		if (ENOQUOTA(errno)) {
+		if (ENOQUOTA(output_errno)) {
 			mail_storage_set_error(storage,
 				MAIL_ERROR_NOQUOTA, MAIL_ERRSTR_NO_QUOTA);
-		} else if (errno != 0) {
+		} else if (output_errno != 0) {
 			mail_storage_set_critical(storage,
-				"write(%s) failed: %m", path);
+				"write(%s) failed: %s", path, output_errstr);
 		}
 
 		maildir_save_remove_last_filename(ctx);

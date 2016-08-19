@@ -44,11 +44,11 @@ struct imap_sync_context {
 
 	unsigned int messages_count;
 
-	unsigned int failed:1;
-	unsigned int finished:1;
-	unsigned int no_newmail:1;
-	unsigned int have_new_mails:1;
-	unsigned int search_update_notifying:1;
+	bool failed:1;
+	bool finished:1;
+	bool no_newmail:1;
+	bool have_new_mails:1;
+	bool search_update_notifying:1;
 };
 
 static void uids_to_seqs(struct mailbox *box, ARRAY_TYPE(seq_range) *uids)
@@ -315,7 +315,7 @@ static int imap_sync_finish(struct imap_sync_context *ctx, bool aborting)
 	if (mailbox_sync_deinit(&ctx->sync_ctx, &ctx->sync_status) < 0 ||
 	    ctx->failed) {
 		ctx->failed = TRUE;
-		return -1;
+		ret = -1;
 	}
 	mailbox_get_open_status(ctx->box, STATUS_UIDVALIDITY |
 				STATUS_MESSAGES | STATUS_RECENT |
@@ -412,7 +412,7 @@ static int imap_sync_send_flags(struct imap_sync_context *ctx, string_t *str)
 
 	str_truncate(str, 0);
 	str_printfa(str, "* %u FETCH (", ctx->seq);
-	if (ctx->imap_flags & IMAP_SYNC_FLAG_SEND_UID)
+	if ((ctx->imap_flags & IMAP_SYNC_FLAG_SEND_UID) != 0)
 		str_printfa(str, "UID %u ", ctx->mail->uid);
 	if ((ctx->client->enabled_features & MAILBOX_FEATURE_CONDSTORE) != 0 &&
 	    !ctx->client->nonpermanent_modseqs) {
@@ -431,7 +431,7 @@ static int imap_sync_send_modseq(struct imap_sync_context *ctx, string_t *str)
 
 	str_truncate(str, 0);
 	str_printfa(str, "* %u FETCH (", ctx->seq);
-	if (ctx->imap_flags & IMAP_SYNC_FLAG_SEND_UID)
+	if ((ctx->imap_flags & IMAP_SYNC_FLAG_SEND_UID) != 0)
 		str_printfa(str, "UID %u ", ctx->mail->uid);
 	imap_sync_add_modseq(ctx, str);
 	str_append_c(str, ')');
@@ -697,7 +697,7 @@ static void get_common_sync_flags(struct client *client,
 		    cmd->sync->counter == client->sync_counter) {
 			if ((cmd->sync->flags & MAILBOX_SYNC_FLAG_FAST) != 0)
 				fast_count++;
-			if (cmd->sync->flags & MAILBOX_SYNC_FLAG_NO_EXPUNGES)
+			if ((cmd->sync->flags & MAILBOX_SYNC_FLAG_NO_EXPUNGES) != 0)
 				noexpunges_count++;
 			*flags_r |= cmd->sync->flags;
 			*imap_flags_r |= cmd->sync->imap_flags;
@@ -762,18 +762,20 @@ bool cmd_sync(struct client_command_context *cmd, enum mailbox_sync_flags flags,
 	if (cmd->cancel)
 		return TRUE;
 
+	cmd->last_run_timeval = ioloop_timeval;
 	if (client->mailbox == NULL) {
 		/* no mailbox selected, no point in delaying the sync */
 		if (tagline != NULL)
 			client_send_tagline(cmd, tagline);
 		return TRUE;
 	}
+	cmd->tagline_reply = p_strdup(cmd->pool, tagline);
 
 	cmd->sync = p_new(cmd->pool, struct client_sync_context, 1);
 	cmd->sync->counter = client->sync_counter;
 	cmd->sync->flags = flags;
 	cmd->sync->imap_flags = imap_flags;
-	cmd->sync->tagline = p_strdup(cmd->pool, tagline);
+	cmd->sync->tagline = cmd->tagline_reply;
 	cmd->state = CLIENT_COMMAND_STATE_WAIT_SYNC;
 
 	cmd->func = NULL;
@@ -828,7 +830,7 @@ static bool cmd_sync_delayed_real(struct client *client)
 	for (cmd = client->command_queue; cmd != NULL; cmd = cmd->next) {
 		if (cmd->sync != NULL &&
 		    cmd->sync->counter == client->sync_counter) {
-			if (cmd->sync->flags & MAILBOX_SYNC_FLAG_NO_EXPUNGES) {
+			if ((cmd->sync->flags & MAILBOX_SYNC_FLAG_NO_EXPUNGES) != 0) {
 				if (first_nonexpunge == NULL)
 					first_nonexpunge = cmd;
 			} else {

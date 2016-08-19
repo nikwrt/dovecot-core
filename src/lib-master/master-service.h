@@ -32,7 +32,11 @@ enum master_service_flags {
 	   listeners (i.e. the service does STARTTLS). */
 	MASTER_SERVICE_FLAG_USE_SSL_SETTINGS	= 0x200,
 	/* Don't initialize SSL context automatically. */
-	MASTER_SERVICE_FLAG_NO_SSL_INIT		= 0x400
+	MASTER_SERVICE_FLAG_NO_SSL_INIT		= 0x400,
+	/* Don't create a data stack frame between master_service_init() and
+	   master_service_init_finish(). By default this is done to make sure
+	   initialization doesn't unnecessarily use up memory in data stack. */
+	MASTER_SERVICE_FLAG_NO_INIT_DATASTACK_FRAME = 0x800
 };
 
 struct master_service_connection {
@@ -46,10 +50,10 @@ struct master_service_connection {
 	struct ip_addr real_remote_ip, real_local_ip;
 	in_port_t real_remote_port, real_local_port;
 
-	unsigned int fifo:1;
-	unsigned int ssl:1;
+	bool fifo:1;
+	bool ssl:1;
 
-	unsigned int accepted:1;
+	bool accepted:1;
 };
 
 typedef void

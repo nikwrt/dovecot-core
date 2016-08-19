@@ -37,7 +37,7 @@ static int parse_timezone(const unsigned char *str, size_t len)
 		/* numeric offset */
 		if (!i_isdigit(str[1]) || !i_isdigit(str[2]) ||
 		    !i_isdigit(str[3]) || !i_isdigit(str[4]))
-			return FALSE;
+			return 0;
 
 		offset = ((str[1]-'0') * 10 + (str[2]-'0')) * 60  +
 			(str[3]-'0') * 10 + (str[4]-'0');
@@ -222,7 +222,11 @@ message_date_parser_tokens(struct message_date_parser_context *ctx,
 		/* missing timezone */
 		*timezone_offset_r = 0;
 	} else {
-		/* timezone */
+		/* timezone. invalid timezones are treated as GMT, because
+		   we may not know all the possible timezones that are used
+		   and it's better to give at least a mostly correct reply.
+		   FIXME: perhaps some different strict version of this
+		   function would be useful? */
 		*timezone_offset_r = parse_timezone(value, len);
 	}
 

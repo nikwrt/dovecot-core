@@ -395,8 +395,8 @@ int client_create(int fd_in, int fd_out, const char *session_id,
 	client->session_id = p_strdup(pool, session_id);
 	client->fd_in = fd_in;
 	client->fd_out = fd_out;
-	client->input = i_stream_create_fd(fd_in, MAX_INBUF_SIZE, FALSE);
-	client->output = o_stream_create_fd(fd_out, (size_t)-1, FALSE);
+	client->input = i_stream_create_fd(fd_in, MAX_INBUF_SIZE);
+	client->output = o_stream_create_fd(fd_out, (size_t)-1);
 	o_stream_set_no_error_handling(client->output, TRUE);
 	o_stream_set_flush_callback(client->output, client_output, client);
 
@@ -505,8 +505,8 @@ static const char *client_build_uidl_change_string(struct client *client)
 			new_hash ^= crc32_str(client->message_uidls[i]);
 	} else {
 		for (i = 0, new_hash = 0; i < client->messages_count; i++) {
-			if (client->deleted_bitmask[i / CHAR_BIT] &
-			    (1 << (i % CHAR_BIT)))
+			if ((client->deleted_bitmask[i / CHAR_BIT] &
+			     (1 << (i % CHAR_BIT))) != 0)
 				continue;
 			new_hash ^= crc32_str(client->message_uidls[i]);
 		}
@@ -542,7 +542,7 @@ static const char *client_stats(struct client *client)
 	struct var_expand_table *tab;
 	string_t *str;
 
-	tab = t_malloc(sizeof(static_tab));
+	tab = t_malloc_no0(sizeof(static_tab));
 	memcpy(tab, static_tab, sizeof(static_tab));
 
 	tab[0].value = dec2str(client->top_bytes);
@@ -550,7 +550,7 @@ static const char *client_stats(struct client *client)
 	tab[2].value = dec2str(client->retr_bytes);
 	tab[3].value = dec2str(client->retr_count);
 	tab[4].value = client->delete_success ?
-		dec2str(client->deleted_count) : 0;
+		dec2str(client->deleted_count) : "0";
 	tab[5].value = dec2str(client->messages_count);
 	tab[6].value = dec2str(client->total_size);
 	tab[7].value = dec2str(client->input->v_offset);
@@ -805,7 +805,6 @@ static void client_input(struct client *client)
 
 static int client_output(struct client *client)
 {
-	o_stream_cork(client->output);
 	if (o_stream_flush(client->output) < 0) {
 		client_destroy(client, NULL);
 		return 1;
@@ -835,7 +834,6 @@ static int client_output(struct client *client)
 		}
 	}
 
-	o_stream_uncork(client->output);
 	if (client->cmd != NULL) {
 		/* command not finished yet */
 		return 0;

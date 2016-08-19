@@ -78,7 +78,10 @@ enum mail_storage_class_flags {
 	MAIL_STORAGE_CLASS_FLAG_BINARY_DATA	= 0x100,
 	/* Message GUIDs can only be 128bit (always set
 	   mailbox_status.have_only_guid128) */
-	MAIL_STORAGE_CLASS_FLAG_HAVE_MAIL_GUID128 = 0x200
+	MAIL_STORAGE_CLASS_FLAG_HAVE_MAIL_GUID128 = 0x200,
+	/* Storage deletes all files internally - mailbox list's
+	   delete_mailbox() shouldn't delete anything itself. */
+	MAIL_STORAGE_CLASS_FLAG_NO_LIST_DELETES	= 0x400
 };
 
 struct mail_binary_cache {
@@ -139,12 +142,30 @@ struct mail_storage {
 	ARRAY(union mail_storage_module_context *) module_contexts;
 
 	/* Failed to create shared attribute dict, don't try again */
-	unsigned int shared_attr_dict_failed:1;
+	bool shared_attr_dict_failed:1;
 };
 
 struct mail_attachment_part {
 	struct message_part *part;
 	const char *content_type, *content_disposition;
+};
+
+struct virtual_mailbox_vfuncs {
+	/* convert backend UIDs to virtual UIDs. if some backend UID doesn't
+	   exist in mailbox, it's simply ignored */
+	void (*get_virtual_uids)(struct mailbox *box,
+				 struct mailbox *backend_mailbox,
+				 const ARRAY_TYPE(seq_range) *backend_uids,
+				 ARRAY_TYPE(seq_range) *virtual_uids_r);
+	/* like get_virtual_uids(), but if a backend UID doesn't exist,
+	   convert it to 0. */
+	void (*get_virtual_uid_map)(struct mailbox *box,
+				    struct mailbox *backend_mailbox,
+				    const ARRAY_TYPE(seq_range) *backend_uids,
+				    ARRAY_TYPE(uint32_t) *virtual_uids_r);
+	void (*get_virtual_backend_boxes)(struct mailbox *box,
+					  ARRAY_TYPE(mailboxes) *mailboxes,
+					  bool only_with_msgs);
 };
 
 struct mailbox_vfuncs {
@@ -173,10 +194,12 @@ struct mailbox_vfuncs {
 
 	int (*attribute_set)(struct mailbox_transaction_context *t,
 			     enum mail_attribute_type type, const char *key,
-			     const struct mail_attribute_value *value);
-	int (*attribute_get)(struct mailbox_transaction_context *t,
+			     const struct mail_attribute_value *value,
+			     bool internal_attribute);
+	int (*attribute_get)(struct mailbox *box,
 			     enum mail_attribute_type type, const char *key,
-			     struct mail_attribute_value *value_r);
+			     struct mail_attribute_value *value_r,
+			     bool internal_attribute);
 	struct mailbox_attribute_iter *
 		(*attribute_iter_init)(struct mailbox *box,
 				       enum mail_attribute_type type,
@@ -185,10 +208,11 @@ struct mailbox_vfuncs {
 	int (*attribute_iter_deinit)(struct mailbox_attribute_iter *iter);
 
 	/* Lookup sync extension record and figure out if it mailbox has
-	   changed since. Returns 1 = yes, 0 = no, -1 = error. */
+	   changed since. Returns 1 = yes, 0 = no, -1 = error. if quick==TRUE,
+	   return 1 if it's too costly to find out exactly. */
 	int (*list_index_has_changed)(struct mailbox *box,
 				      struct mail_index_view *list_view,
-				      uint32_t seq);
+				      uint32_t seq, bool quick);
 	/* Update the sync extension record. */
 	void (*list_index_update_sync)(struct mailbox *box,
 				       struct mail_index_transaction *trans,
@@ -271,6 +295,10 @@ struct mailbox_index_vsize {
 	uint32_t message_count;
 };
 
+struct mailbox_index_pop3_uidl {
+	uint32_t max_uid_with_pop3_uidl;
+};
+
 struct mailbox_index_first_saved {
 	uint32_t uid;
 	uint32_t timestamp;
@@ -283,7 +311,9 @@ struct mailbox {
 	struct mail_storage *storage;
 	struct mailbox_list *list;
 
-        struct mailbox_vfuncs v, *vlast;
+	struct mailbox_vfuncs v, *vlast;
+	/* virtual mailboxes: */
+	const struct virtual_mailbox_vfuncs *virtual_vfuncs;
 /* private: */
 	pool_t pool, metadata_pool;
 	/* Linked list of all mailboxes in this storage */
@@ -323,6 +353,7 @@ struct mailbox {
 	enum mailbox_feature enabled_features;
 	struct mail_msgpart_partial_cache partial_cache;
 	uint32_t vsize_hdr_ext_id;
+	uint32_t pop3_uidl_hdr_ext_id;
 
 	/* MAIL_RECENT flags handling */
 	ARRAY_TYPE(seq_range) recent_flags;
@@ -348,40 +379,40 @@ struct mailbox {
 
 	/* When FAST open flag is used, the mailbox isn't actually opened until
 	   it's synced for the first time. */
-	unsigned int opened:1;
+	bool opened:1;
 	/* Mailbox was deleted while we had it open. */
-	unsigned int mailbox_deleted:1;
+	bool mailbox_deleted:1;
 	/* Mailbox is being created */
-	unsigned int creating:1;
+	bool creating:1;
 	/* Mailbox is being deleted */
-	unsigned int deleting:1;
+	bool deleting:1;
 	/* Don't use MAIL_INDEX_SYNC_FLAG_DELETING_INDEX for sync flag */
-	unsigned int delete_sync_check:1;
+	bool delete_sync_check:1;
 	/* Delete mailbox only if it's empty */
-	unsigned int deleting_must_be_empty:1;
+	bool deleting_must_be_empty:1;
 	/* The backend wants to skip checking if there are 0 messages before
 	   calling mailbox_list.delete_mailbox() */
-	unsigned int delete_skip_empty_check:1;
+	bool delete_skip_empty_check:1;
 	/* Mailbox was already marked as deleted within this allocation. */
-	unsigned int marked_deleted:1;
+	bool marked_deleted:1;
 	/* TRUE if this is an INBOX for this user */
-	unsigned int inbox_user:1;
+	bool inbox_user:1;
 	/* TRUE if this is an INBOX for this namespace (user or shared) */
-	unsigned int inbox_any:1;
+	bool inbox_any:1;
 	/* When copying to this mailbox, require that mailbox_copy() uses
 	   mailbox_save_*() to actually save a new physical copy rather than
 	   simply incrementing a reference count (e.g. via hard link) */
-	unsigned int disable_reflink_copy_to:1;
+	bool disable_reflink_copy_to:1;
 	/* Don't allow creating any new keywords */
-	unsigned int disallow_new_keywords:1;
+	bool disallow_new_keywords:1;
 	/* Mailbox has been synced at least once */
-	unsigned int synced:1;
+	bool synced:1;
 	/* Updating cache file is disabled */
-	unsigned int mail_cache_disabled:1;
+	bool mail_cache_disabled:1;
 	/* Update first_saved field to mailbox list index. */
-	unsigned int update_first_saved:1;
+	bool update_first_saved:1;
 	/* mailbox_verify_create_name() only checks for mailbox_verify_name() */
-	unsigned int skip_create_name_restrictions:1;
+	bool skip_create_name_restrictions:1;
 };
 
 struct mail_vfuncs {
@@ -444,11 +475,9 @@ struct mail_vfuncs {
 	void (*update_pop3_uidl)(struct mail *mail, const char *uidl);
 	void (*expunge)(struct mail *mail);
 	void (*set_cache_corrupted)(struct mail *mail,
-				    enum mail_fetch_field field);
+				    enum mail_fetch_field field,
+				    const char *reason);
 	int (*istream_opened)(struct mail *mail, struct istream **input);
-	void (*set_cache_corrupted_reason)(struct mail *mail,
-					   enum mail_fetch_field field,
-					   const char *reason);
 };
 
 union mail_module_context {
@@ -474,6 +503,8 @@ struct mail_private {
 
 	pool_t pool, data_pool;
 	ARRAY(union mail_module_context *) module_contexts;
+
+	const char *get_stream_reason;
 };
 
 struct mailbox_list_context {
@@ -528,6 +559,9 @@ struct mailbox_transaction_context {
 	struct mail_transaction_commit_changes *changes;
 	ARRAY(union mailbox_transaction_module_context *) module_contexts;
 
+	uint32_t prev_pop3_uidl_tracking_seq;
+	uint32_t highest_pop3_uidl_uid;
+
 	struct mail_save_context *save_ctx;
 	/* number of mails saved/copied within this transaction. */
 	unsigned int save_count;
@@ -538,11 +572,9 @@ struct mailbox_transaction_context {
 	/* these statistics are never reset by mail-storage API: */
 	struct mailbox_transaction_stats stats;
 	/* Set to TRUE to update stats_* fields */
-	unsigned int stats_track:1;
+	bool stats_track:1;
 	/* We've done some non-transactional (e.g. dovecot-uidlist updates) */
-	unsigned int nontransactional_changes:1;
-	/* FIXME: v2.3: this should be in attribute_get/set() parameters */
-	unsigned int internal_attribute:1;
+	bool nontransactional_changes:1;
 };
 
 union mail_search_module_context {
@@ -571,8 +603,8 @@ struct mail_search_context {
 
 	ARRAY(union mail_search_module_context *) module_contexts;
 
-	unsigned int seen_lost_data:1;
-	unsigned int progress_hidden:1;
+	bool seen_lost_data:1;
+	bool progress_hidden:1;
 };
 
 struct mail_save_data {
@@ -605,15 +637,15 @@ struct mail_save_context {
 
 	/* mailbox_save_alloc() called, but finish/cancel not.
 	   the same context is usually returned by the backends for reuse. */
-	unsigned int unfinished:1;
+	bool unfinished:1;
 	/* mailbox_save_finish() or mailbox_copy() is being called. */
-	unsigned int finishing:1;
+	bool finishing:1;
 	/* mail was copied using saving */
-	unsigned int copying_via_save:1;
+	bool copying_via_save:1;
 	/* mail is being saved, not copied */
-	unsigned int saving:1;
+	bool saving:1;
 	/* mail is being moved - ignore quota */
-	unsigned int moving:1;
+	bool moving:1;
 };
 
 struct mailbox_sync_context {

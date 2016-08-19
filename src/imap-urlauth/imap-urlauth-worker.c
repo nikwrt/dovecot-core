@@ -71,12 +71,12 @@ struct client {
 	const struct imap_urlauth_worker_settings *set;
 	const struct mail_storage_settings *mail_set;
 
-	unsigned int debug:1;
-	unsigned int finished:1;
-	unsigned int waiting_input:1;
-	unsigned int version_received:1;
-	unsigned int access_received:1;
-	unsigned int access_anonymous:1;
+	bool debug:1;
+	bool finished:1;
+	bool waiting_input:1;
+	bool version_received:1;
+	bool access_received:1;
+	bool access_anonymous:1;
 };
 
 static bool verbose_proctitle = FALSE;
@@ -193,8 +193,8 @@ client_create_standalone(const char *access_user,
 	}
 	client->debug = debug;
 
-	client->input = i_stream_create_fd(fd_in, MAX_INBUF_SIZE, FALSE);
-	client->output = o_stream_create_fd(fd_out, (size_t)-1, FALSE);
+	client->input = i_stream_create_fd(fd_in, MAX_INBUF_SIZE);
+	client->output = o_stream_create_fd(fd_out, (size_t)-1);
 	client->io = io_add(fd_in, IO_READ, client_input, client);
 	client->to_idle = timeout_add(CLIENT_IDLE_TIMEOUT_MSECS,
 				      client_idle_timeout, client);
@@ -280,7 +280,7 @@ static int client_run_url(struct client *client)
 	size_t size;
 	ssize_t ret = 0;
 
-	while (i_stream_read_data(client->msg_part_input, &data, &size, 0) > 0) {
+	while (i_stream_read_more(client->msg_part_input, &data, &size) > 0) {
 		if ((ret = o_stream_send(client->output, data, size)) < 0)
 			break;
 		i_stream_skip(client->msg_part_input, ret);
@@ -721,7 +721,6 @@ static void client_input(struct client *client)
 
 static int client_output(struct client *client)
 {
-	o_stream_cork(client->output);
 	if (o_stream_flush(client->output) < 0) {
 		if (client->ctrl_output != NULL)
 			(void)o_stream_send_str(client->ctrl_output, "DISCONNECTED\n");
@@ -744,7 +743,6 @@ static int client_output(struct client *client)
 		}
 	}
 
-	o_stream_uncork(client->output);
 	if (client->url != NULL) {
 		/* url not finished yet */
 		return 0;
@@ -793,9 +791,8 @@ client_ctrl_read_fds(struct client *client)
 	}
 
 	client->ctrl_input =
-		i_stream_create_fd(client->fd_ctrl, MAX_INBUF_SIZE, FALSE);
-	client->ctrl_output =
-		o_stream_create_fd(client->fd_ctrl, (size_t)-1, FALSE);
+		i_stream_create_fd(client->fd_ctrl, MAX_INBUF_SIZE);
+	client->ctrl_output = o_stream_create_fd(client->fd_ctrl, (size_t)-1);
 	return 1;
 }
 
@@ -913,8 +910,8 @@ static void client_ctrl_input(struct client *client)
 		return;
 	}
 
-	client->input = i_stream_create_fd(client->fd_in, MAX_INBUF_SIZE, FALSE);
-	client->output = o_stream_create_fd(client->fd_out, (size_t)-1, FALSE); 
+	client->input = i_stream_create_fd(client->fd_in, MAX_INBUF_SIZE);
+	client->output = o_stream_create_fd(client->fd_out, (size_t)-1);
 	client->io = io_add(client->fd_in, IO_READ, client_input, client);
 	o_stream_set_flush_callback(client->output, client_output, client);
 

@@ -402,7 +402,7 @@ const char *mailbox_list_get_unexpanded_path(struct mailbox_list *list,
 	if (mailbox_list_settings_parse_full(user, p + 1, FALSE,
 					     &set, &error) < 0)
 		return "";
-	if (mailbox_list_set_get_root_path(&set, type, &path) <= 0)
+	if (!mailbox_list_set_get_root_path(&set, type, &path))
 		return "";
 	return path;
 }
@@ -433,7 +433,7 @@ mailbox_list_escape_name_params(const char *vname, const char *ns_prefix,
 {
 	unsigned int ns_prefix_len = strlen(ns_prefix);
 	string_t *escaped_name = t_str_new(64);
-	char dirstart = TRUE;
+	bool dirstart = TRUE;
 
 	/* no escaping of namespace prefix */
 	if (strncmp(ns_prefix, vname, ns_prefix_len) == 0) {
@@ -739,7 +739,7 @@ const char *mailbox_list_default_get_vname(struct mailbox_list *list,
 	if (list_sep != ns_sep || prefix_len > 0) {
 		/* @UNSAFE */
 		name_len = strlen(vname);
-		ret = t_malloc(prefix_len + name_len + 1);
+		ret = t_malloc_no0(prefix_len + name_len + 1);
 		memcpy(ret, list->ns->prefix, prefix_len);
 		for (i = 0; i < name_len; i++) {
 			ret[i + prefix_len] =
@@ -866,6 +866,10 @@ void mailbox_list_get_default_storage(struct mailbox_list *list,
 
 char mailbox_list_get_hierarchy_sep(struct mailbox_list *list)
 {
+	/* the current API doesn't allow returning an error, so imap code
+	   looks at the list's last error. make sure the error is cleared
+	   so the error-check doesn't return something irrelevant */
+	mailbox_list_clear_error(list);
 	return list->v.get_hierarchy_sep(list);
 }
 
@@ -1550,20 +1554,17 @@ static bool mailbox_list_init_changelog(struct mailbox_list *list)
 int mailbox_list_mkdir_missing_index_root(struct mailbox_list *list)
 {
 	const char *root_dir, *index_dir;
-	int ret;
 
 	if (list->index_root_dir_created)
 		return 1;
 
 	/* if index root dir hasn't been created yet, do it now */
-	ret = mailbox_list_get_root_path(list, MAILBOX_LIST_PATH_TYPE_INDEX,
-					 &index_dir);
-	if (ret <= 0)
-		return ret;
-	ret = mailbox_list_get_root_path(list, MAILBOX_LIST_PATH_TYPE_MAILBOX,
-					 &root_dir);
-	if (ret <= 0)
-		return ret;
+	if (!mailbox_list_get_root_path(list, MAILBOX_LIST_PATH_TYPE_INDEX,
+					&index_dir))
+		return 0;
+	if (!mailbox_list_get_root_path(list, MAILBOX_LIST_PATH_TYPE_MAILBOX,
+					&root_dir))
+		return 0;
 
 	if (strcmp(root_dir, index_dir) != 0) {
 		if (mailbox_list_mkdir_root(list, index_dir,

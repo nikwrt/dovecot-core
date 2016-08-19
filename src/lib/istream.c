@@ -52,7 +52,11 @@ void i_stream_unref(struct istream **stream)
 		if (_stream->line_str != NULL)
 			str_free(&_stream->line_str);
 	}
-	io_stream_unref(&(*stream)->real_stream->iostream);
+	if (!io_stream_unref(&(*stream)->real_stream->iostream)) {
+		if ((*stream)->real_stream->parent != NULL)
+			i_stream_unref(&(*stream)->real_stream->parent);
+		io_stream_free(&(*stream)->real_stream->iostream);
+	}
 	*stream = NULL;
 }
 
@@ -97,6 +101,11 @@ const char *i_stream_get_error(struct istream *stream)
 	return strerror(stream->stream_errno);
 }
 
+const char *i_stream_get_disconnect_reason(struct istream *stream)
+{
+	return io_stream_get_disconnect_reason(stream, NULL);
+}
+
 void i_stream_close(struct istream *stream)
 {
 	i_stream_close_full(stream, TRUE);
@@ -114,7 +123,14 @@ void i_stream_set_max_buffer_size(struct istream *stream, size_t max_size)
 
 size_t i_stream_get_max_buffer_size(struct istream *stream)
 {
-	return stream->real_stream->max_buffer_size;
+	size_t max_size = 0;
+
+	do {
+		if (max_size < stream->real_stream->max_buffer_size)
+			max_size = stream->real_stream->max_buffer_size;
+		stream = stream->real_stream->parent;
+	} while (stream != NULL);
+	return max_size;
 }
 
 void i_stream_set_return_partial_line(struct istream *stream, bool set)
@@ -260,7 +276,7 @@ void i_stream_skip(struct istream *stream, uoff_t count)
 	_stream->skip = _stream->pos;
 	stream->v_offset += data_size;
 
-	if (unlikely(stream->closed))
+	if (unlikely(stream->closed || stream->stream_errno != 0))
 		return;
 
 	_stream->seek(_stream, stream->v_offset + count, FALSE);
@@ -287,7 +303,7 @@ void i_stream_seek(struct istream *stream, uoff_t v_offset)
 	    i_stream_can_optimize_seek(_stream))
 		i_stream_skip(stream, v_offset - stream->v_offset);
 	else {
-		if (unlikely(stream->closed))
+		if (unlikely(stream->closed || stream->stream_errno != 0))
 			return;
 
 		stream->eof = FALSE;
@@ -300,7 +316,7 @@ void i_stream_seek_mark(struct istream *stream, uoff_t v_offset)
 {
 	struct istream_private *_stream = stream->real_stream;
 
-	if (unlikely(stream->closed))
+	if (unlikely(stream->closed || stream->stream_errno != 0))
 		return;
 
 	stream->eof = FALSE;
@@ -312,7 +328,7 @@ void i_stream_sync(struct istream *stream)
 {
 	struct istream_private *_stream = stream->real_stream;
 
-	if (unlikely(stream->closed))
+	if (unlikely(stream->closed || stream->stream_errno != 0))
 		return;
 
 	if (_stream->sync != NULL) {
@@ -325,7 +341,7 @@ int i_stream_stat(struct istream *stream, bool exact, const struct stat **st_r)
 {
 	struct istream_private *_stream = stream->real_stream;
 
-	if (unlikely(stream->closed))
+	if (unlikely(stream->closed || stream->stream_errno != 0))
 		return -1;
 
 	if (_stream->stat(_stream, exact) < 0)
@@ -338,7 +354,7 @@ int i_stream_get_size(struct istream *stream, bool exact, uoff_t *size_r)
 {
 	struct istream_private *_stream = stream->real_stream;
 
-	if (unlikely(stream->closed))
+	if (unlikely(stream->closed || stream->stream_errno != 0))
 		return -1;
 
 	return _stream->get_size(_stream, exact, size_r);
@@ -358,7 +374,12 @@ bool i_stream_is_eof(struct istream *stream)
 
 uoff_t i_stream_get_absolute_offset(struct istream *stream)
 {
-	return stream->real_stream->abs_start_offset + stream->v_offset;
+	uoff_t abs_offset = stream->v_offset;
+	while (stream != NULL) {
+		abs_offset += stream->real_stream->start_offset;
+		stream = stream->real_stream->parent;
+	}
+	return abs_offset;
 }
 
 static char *i_stream_next_line_finish(struct istream_private *stream, size_t i)
@@ -374,7 +395,7 @@ static char *i_stream_next_line_finish(struct istream_private *stream, size_t i)
 		stream->line_crlf = FALSE;
 	}
 
-	if (stream->w_buffer != NULL) {
+	if (stream->buffer == stream->w_buffer) {
 		/* modify the buffer directly */
 		stream->w_buffer[end] = '\0';
 		ret = (char *)stream->w_buffer + stream->skip;
@@ -482,7 +503,7 @@ i_stream_get_data(struct istream *stream, size_t *size_r)
 
 	if (_stream->skip >= _stream->pos) {
 		*size_r = 0;
-		return NULL;
+		return &uchar_nul;
 	}
 
 	if (i_stream_is_buffer_invalid(_stream)) {
@@ -507,7 +528,7 @@ i_stream_get_data(struct istream *stream, size_t *size_r)
 			_stream->skip = _stream->pos = 0;
 			stream->eof = FALSE;
 		}
-		return NULL;
+		return &uchar_nul;
 	}
 
         *size_r = _stream->pos - _stream->skip;
@@ -584,9 +605,7 @@ void i_stream_compress(struct istream_private *stream)
 
 void i_stream_grow_buffer(struct istream_private *stream, size_t bytes)
 {
-	size_t old_size;
-
-	i_assert(stream->max_buffer_size > 0);
+	size_t old_size, max_size;
 
 	old_size = stream->buffer_size;
 
@@ -596,8 +615,10 @@ void i_stream_grow_buffer(struct istream_private *stream, size_t bytes)
 	else
 		stream->buffer_size = nearest_power(stream->buffer_size);
 
-	if (stream->buffer_size > stream->max_buffer_size)
-		stream->buffer_size = stream->max_buffer_size;
+	max_size = i_stream_get_max_buffer_size(&stream->istream);
+	i_assert(max_size > 0);
+	if (stream->buffer_size > max_size)
+		stream->buffer_size = max_size;
 
 	if (stream->buffer_size <= old_size)
 		stream->buffer_size = old_size;
@@ -617,8 +638,7 @@ bool i_stream_try_alloc(struct istream_private *stream,
 		if (stream->skip > 0) {
 			/* remove the unused bytes from beginning of buffer */
                         i_stream_compress(stream);
-		} else if (stream->max_buffer_size == 0 ||
-			   stream->buffer_size < stream->max_buffer_size) {
+		} else if (stream->buffer_size < i_stream_get_max_buffer_size(&stream->istream)) {
 			/* buffer is full - grow it */
 			i_stream_grow_buffer(stream, I_STREAM_MIN_SIZE);
 		}
@@ -766,7 +786,7 @@ void i_stream_default_seek_nonseekable(struct istream_private *stream,
 				"Can't seek to offset %"PRIuUOFF_T
 				", because we have data only up to offset %"
 				PRIuUOFF_T" (eof=%d)", v_offset,
-				stream->istream.v_offset, stream->istream.eof);
+				stream->istream.v_offset, stream->istream.eof ? 1 : 0);
 			stream->istream.stream_errno = ESPIPE;
 			return;
 		}
@@ -803,10 +823,8 @@ static int
 i_stream_default_get_size(struct istream_private *stream,
 			  bool exact, uoff_t *size_r)
 {
-	if (stream->stat(stream, exact) < 0) {
-		stream->istream.stream_errno = stream->parent->stream_errno;
+	if (stream->stat(stream, exact) < 0)
 		return -1;
-	}
 	if (stream->statbuf.st_size == -1)
 		return 0;
 
@@ -821,8 +839,7 @@ void i_stream_init_parent(struct istream_private *_stream,
 	_stream->parent = parent;
 	_stream->parent_start_offset = parent->v_offset;
 	_stream->parent_expected_offset = parent->v_offset;
-	_stream->abs_start_offset = parent->v_offset +
-		parent->real_stream->abs_start_offset;
+	_stream->start_offset = parent->v_offset;
 	/* if parent stream is an istream-error, copy the error */
 	_stream->istream.stream_errno = parent->stream_errno;
 	_stream->istream.eof = parent->eof;

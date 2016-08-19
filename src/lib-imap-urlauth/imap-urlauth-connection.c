@@ -42,7 +42,7 @@ struct imap_urlauth_request {
 	imap_urlauth_request_callback_t *callback;
 	void *context;
 
-	unsigned int binary_has_nuls;
+	bool binary_has_nuls;
 };
 
 struct imap_urlauth_target {
@@ -79,7 +79,7 @@ struct imap_urlauth_connection {
 	/* userid => target struct */
 	struct imap_urlauth_target *targets_head, *targets_tail;
 
-	unsigned int reading_literal:1;
+	bool reading_literal:1;
 };
 
 #define IMAP_URLAUTH_RECONNECT_MIN_SECS 2
@@ -651,7 +651,7 @@ imap_urlauth_connection_read_literal(struct imap_urlauth_connection *conn)
 	reply.url = urlreq->url;
 	reply.flags = urlreq->flags;
 	reply.bodypartstruct = urlreq->bodypartstruct;
-	reply.binary_has_nuls = urlreq->binary_has_nuls;
+	reply.binary_has_nuls = urlreq->binary_has_nuls ? 1 : 0;
 
 	if (conn->literal_size > 0) {
 		if (imap_urlauth_fetch_reply_set_literal_stream(conn, &reply) < 0)
@@ -914,8 +914,8 @@ imap_urlauth_connection_do_connect(struct imap_urlauth_connection *conn)
 		timeout_remove(&conn->to_reconnect);
 
 	conn->fd = fd;
-	conn->input = i_stream_create_fd(fd, (size_t)-1, FALSE);
-	conn->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	conn->input = i_stream_create_fd(fd, (size_t)-1);
+	conn->output = o_stream_create_fd(fd, (size_t)-1);
 	conn->io = io_add(fd, IO_READ, imap_urlauth_input, conn);
 	conn->state = IMAP_URLAUTH_STATE_AUTHENTICATING;
 

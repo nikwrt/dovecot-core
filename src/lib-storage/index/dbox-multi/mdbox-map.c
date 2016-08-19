@@ -24,8 +24,8 @@ struct mdbox_map_transaction_context {
 	struct mdbox_map_atomic_context *atomic;
 	struct mail_index_transaction *trans;
 
-	unsigned int changed:1;
-	unsigned int committed:1;
+	bool changed:1;
+	bool committed:1;
 };
 
 static int mdbox_map_generate_uid_validity(struct mdbox_map *map);
@@ -1086,7 +1086,7 @@ int mdbox_map_append_next(struct mdbox_map_append_context *ctx,
 		ret = 1;
 		existing = TRUE;
 	} else {
-		ret = mdbox_map_find_appendable_file(ctx, mail_size, flags,
+		ret = mdbox_map_find_appendable_file(ctx, mail_size, want_altpath,
 						     &file_append, output_r);
 		existing = FALSE;
 	}

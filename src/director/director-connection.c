@@ -36,6 +36,7 @@
 #include "ostream.h"
 #include "str.h"
 #include "strescape.h"
+#include "time-util.h"
 #include "master-service.h"
 #include "mail-host.h"
 #include "director.h"
@@ -99,6 +100,8 @@ struct director_connection {
 	time_t created;
 	unsigned int minor_version;
 
+	struct timeval last_input, last_output;
+
 	/* for incoming connections the director host isn't known until
 	   ME-line is received */
 	struct director_host *host;
@@ -116,19 +119,19 @@ struct director_connection {
 	/* set during command execution */
 	const char *cur_cmd, *cur_line;
 
-	unsigned int in:1;
-	unsigned int connected:1;
-	unsigned int version_received:1;
-	unsigned int me_received:1;
-	unsigned int handshake_received:1;
-	unsigned int ignore_host_events:1;
-	unsigned int handshake_sending_hosts:1;
-	unsigned int ping_waiting:1;
-	unsigned int synced:1;
-	unsigned int wrong_host:1;
-	unsigned int verifying_left:1;
-	unsigned int users_unsorted:1;
-	unsigned int done_pending:1;
+	bool in:1;
+	bool connected:1;
+	bool version_received:1;
+	bool me_received:1;
+	bool handshake_received:1;
+	bool ignore_host_events:1;
+	bool handshake_sending_hosts:1;
+	bool ping_waiting:1;
+	bool synced:1;
+	bool wrong_host:1;
+	bool verifying_left:1;
+	bool users_unsorted:1;
+	bool done_pending:1;
 };
 
 static void director_connection_disconnected(struct director_connection **conn,
@@ -741,14 +744,14 @@ director_cmd_host_hand_start(struct director_connection *conn,
 		return FALSE;
 	}
 
-	if (remote_ring_completed && !conn->dir->ring_handshaked) {
+	if (remote_ring_completed != 0 && !conn->dir->ring_handshaked) {
 		/* clear everything we have and use only what remote sends us */
 		hosts = mail_hosts_get(conn->dir->mail_hosts);
 		while (array_count(hosts) > 0) {
 			hostp = array_idx(hosts, 0);
 			director_remove_host(conn->dir, NULL, NULL, *hostp);
 		}
-	} else if (!remote_ring_completed && conn->dir->ring_handshaked) {
+	} else if (remote_ring_completed == 0 && conn->dir->ring_handshaked) {
 		/* ignore whatever remote sends */
 		conn->ignore_host_events = TRUE;
 	}
@@ -927,6 +930,11 @@ director_cmd_host_int(struct director_connection *conn, const char *const *args,
 
 			str_printfa(str, "director(%s): Host %s is being updated before previous update had finished (",
 				  conn->name, net_ip2addr(&host->ip));
+			if (host->down != down &&
+			    host->last_updown_change > last_updown_change) {
+				/* our host has a newer change. preserve it. */
+				down = host->down;
+			}
 			if (host->down != down) {
 				if (host->down)
 					str_append(str, "down -> up");
@@ -942,10 +950,6 @@ director_cmd_host_int(struct director_connection *conn, const char *const *args,
 			str_append(str, ") - ");
 
 			vhost_count = I_MIN(vhost_count, host->vhost_count);
-			if (host->down != down) {
-				if (host->last_updown_change <= last_updown_change)
-					down = host->last_updown_change;
-			}
 			last_updown_change = I_MAX(last_updown_change,
 						   host->last_updown_change);
 			str_printfa(str, "setting to state=%s vhosts=%u",
@@ -965,7 +969,7 @@ director_cmd_host_int(struct director_connection *conn, const char *const *args,
 	} else {
 		dir_debug("Ignoring host %s update vhost_count=%u "
 			  "down=%d last_updown_change=%ld (hosts_hash=%u)",
-			  net_ip2addr(&ip), vhost_count, down,
+			  net_ip2addr(&ip), vhost_count, down ? 1 : 0,
 			  (long)last_updown_change,
 			  mail_hosts_hash(conn->dir->mail_hosts));
 	}
@@ -1238,7 +1242,7 @@ director_connection_handle_handshake(struct director_connection *conn,
 		if (conn->minor_version < DIRECTOR_VERSION_TAGS_V2 &&
 		    mail_hosts_have_tags(conn->dir->mail_hosts)) {
 			i_error("director(%s): Director version supports incompatible tags", conn->name);
-			return FALSE;
+			return -1;
 		}
 		conn->version_received = TRUE;
 		if (conn->done_pending) {
@@ -1472,8 +1476,6 @@ static bool director_cmd_connect(struct director_connection *conn,
 	}
 
 	host = director_host_get(conn->dir, &ip, port);
-	/* reset failure timestamp so we'll actually try to connect there. */
-	host->last_network_failure = 0;
 
 	/* remote suggests us to connect elsewhere */
 	if (dir->right != NULL &&
@@ -1484,6 +1486,11 @@ static bool director_cmd_connect(struct director_connection *conn,
 			  host->name, dir->right->name);
 		return TRUE;
 	}
+
+	/* reset failure timestamp so we'll actually try to connect there. */
+	host->last_network_failure = 0;
+	/* reset removed-flag, so we don't crash */
+	host->removed = FALSE;
 
 	if (dir->right == NULL) {
 		dir_debug("Received CONNECT request to %s, "
@@ -1688,6 +1695,7 @@ static void director_connection_input(struct director_connection *conn)
 		i_stream_skip(conn->input, i_stream_get_data_size(conn->input));
 		return;
 	}
+	conn->last_input = ioloop_timeval;
 
 	director_sync_freeze(dir);
 	prev_offset = conn->input->v_offset;
@@ -1731,7 +1739,8 @@ director_connection_send_hosts(struct director_connection *conn, string_t *str)
 
 	send_updowns = conn->minor_version >= DIRECTOR_VERSION_UPDOWN;
 
-	str_printfa(str, "HOST-HAND-START\t%u\n", conn->dir->ring_handshaked);
+	str_printfa(str, "HOST-HAND-START\t%u\n",
+		    conn->dir->ring_handshaked ? 1 : 0);
 	array_foreach(mail_hosts_get(conn->dir->mail_hosts), hostp) {
 		struct mail_host *host = *hostp;
 		const char *host_tag = mail_host_get_tag(host);
@@ -1750,7 +1759,8 @@ director_connection_send_hosts(struct director_connection *conn, string_t *str)
 		}
 		str_append_c(str, '\n');
 	}
-	str_printfa(str, "HOST-HAND-END\t%u\n", conn->dir->ring_handshaked);
+	str_printfa(str, "HOST-HAND-END\t%u\n",
+		    conn->dir->ring_handshaked ? 1 : 0);
 }
 
 static int director_connection_send_done(struct director_connection *conn)
@@ -1822,11 +1832,10 @@ static int director_connection_output(struct director_connection *conn)
 {
 	int ret;
 
+	conn->last_output = ioloop_timeval;
 	if (conn->user_iter != NULL) {
 		/* still handshaking USER list */
-		o_stream_cork(conn->output);
 		ret = director_connection_send_users(conn);
-		o_stream_uncork(conn->output);
 		if (ret < 0) {
 			director_connection_disconnected(&conn,
 				o_stream_get_error(conn->output));
@@ -1847,8 +1856,8 @@ director_connection_init_common(struct director *dir, int fd)
 	conn->created = ioloop_time;
 	conn->fd = fd;
 	conn->dir = dir;
-	conn->input = i_stream_create_fd(conn->fd, MAX_INBUF_SIZE, FALSE);
-	conn->output = o_stream_create_fd(conn->fd, MAX_OUTBUF_SIZE, FALSE);
+	conn->input = i_stream_create_fd(conn->fd, MAX_INBUF_SIZE);
+	conn->output = o_stream_create_fd(conn->fd, MAX_OUTBUF_SIZE);
 	o_stream_set_no_error_handling(conn->output, TRUE);
 	conn->to_ping = timeout_add(DIRECTOR_CONNECTION_ME_TIMEOUT_MSECS,
 				    director_connection_init_timeout, conn);
@@ -2048,9 +2057,10 @@ void director_connection_send(struct director_connection *conn,
 	} T_END;
 	ret = o_stream_send(conn->output, data, len);
 	if (ret != (off_t)len) {
-		if (ret < 0)
-			i_error("director(%s): write() failed: %m", conn->name);
-		else {
+		if (ret < 0) {
+			i_error("director(%s): write() failed: %s", conn->name,
+				o_stream_get_error(conn->output));
+		} else {
 			i_error("director(%s): Output buffer full, "
 				"disconnecting", conn->name);
 		}
@@ -2063,7 +2073,20 @@ void director_connection_send(struct director_connection *conn,
 static void
 director_connection_ping_idle_timeout(struct director_connection *conn)
 {
-	i_error("director(%s): Ping timed out, disconnecting", conn->name);
+	int input_diff = timeval_diff_msecs(&ioloop_timeval, &conn->last_input);
+	int output_diff = timeval_diff_msecs(&ioloop_timeval, &conn->last_output);
+	string_t *str = t_str_new(128);
+
+	str_printfa(str, "Ping timed out, disconnecting "
+		    "(last input %u.%03u s ago, last output %u.%03u s ago",
+		    input_diff/1000, input_diff%1000,
+		    output_diff/1000, output_diff%1000);
+	if (conn->handshake_received)
+		str_append(str, ", handshaked");
+	if (conn->synced)
+		str_append(str, ", synced");
+	str_append_c(str, ')');
+	i_error("director(%s): %s", conn->name, str_c(str));
 	director_connection_disconnected(&conn, "Ping timeout");
 }
 

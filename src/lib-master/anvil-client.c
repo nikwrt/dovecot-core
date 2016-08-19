@@ -113,7 +113,8 @@ static void anvil_input(struct anvil_client *client)
 		aqueue_delete_tail(client->queries);
 	}
 	if (client->input->stream_errno != 0) {
-		i_error("read(%s) failed: %m", client->path);
+		i_error("read(%s) failed: %s", client->path,
+			i_stream_get_error(client->input));
 		anvil_reconnect(client);
 	} else if (client->input->eof) {
 		i_error("read(%s) failed: EOF", client->path);
@@ -147,8 +148,8 @@ int anvil_client_connect(struct anvil_client *client, bool retry)
 		timeout_remove(&client->to_reconnect);
 
 	client->fd = fd;
-	client->input = i_stream_create_fd(fd, ANVIL_INBUF_SIZE, FALSE);
-	client->output = o_stream_create_fd(fd, (size_t)-1, FALSE);
+	client->input = i_stream_create_fd(fd, ANVIL_INBUF_SIZE);
+	client->output = o_stream_create_fd(fd, (size_t)-1);
 	client->io = io_add(fd, IO_READ, anvil_input, client);
 	if (o_stream_send_str(client->output, ANVIL_HANDSHAKE) < 0) {
 		i_error("write(%s) failed: %s", client->path,

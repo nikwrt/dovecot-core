@@ -19,6 +19,7 @@
 #include "index-sort.h"
 #include "mail-search.h"
 #include "mailbox-search-result-private.h"
+#include "mailbox-recent-flags.h"
 #include "index-search-private.h"
 
 #include <ctype.h>
@@ -46,9 +47,9 @@ struct search_header_context {
 
         struct message_header_line *hdr;
 
-	unsigned int parse_headers:1;
-	unsigned int custom_header:1;
-	unsigned int threading:1;
+	bool parse_headers:1;
+	bool custom_header:1;
+	bool threading:1;
 };
 
 struct search_body_context {
@@ -174,7 +175,7 @@ static int search_arg_match_index(struct index_search_context *ctx,
 	switch (arg->type) {
 	case SEARCH_UIDSET:
 	case SEARCH_INTHREAD:
-		return seq_range_exists(&arg->value.seqset, rec->uid);
+		return seq_range_exists(&arg->value.seqset, rec->uid) ? 1 : 0;
 	case SEARCH_FLAGS:
 		/* recent flag shouldn't be set, but indexes from v1.0.x
 		   may contain it. */
@@ -194,7 +195,7 @@ static int search_arg_match_index(struct index_search_context *ctx,
 				flags |= rec->flags & pvt_flags_mask;
 			}
 		}
-		return (flags & arg->value.flags) == arg->value.flags;
+		return (flags & arg->value.flags) == arg->value.flags ? 1 : 0;
 	case SEARCH_KEYWORDS:
 		T_BEGIN {
 			ret = search_arg_match_keywords(ctx, arg);
@@ -211,7 +212,7 @@ static int search_arg_match_index(struct index_search_context *ctx,
 			modseq = mail_index_modseq_lookup(ctx->view,
 						ctx->mail_ctx.seq);
 		}
-		return modseq >= arg->value.modseq->modseq;
+		return modseq >= arg->value.modseq->modseq ? 1 : 0;
 	}
 	default:
 		return -1;
@@ -259,15 +260,15 @@ static int search_arg_match_mailbox(struct index_search_context *ctx,
 			return -1;
 
 		if (strcasecmp(str, "INBOX") == 0)
-			return strcasecmp(arg->value.str, "INBOX") == 0;
-		return strcmp(str, arg->value.str) == 0;
+			return strcasecmp(arg->value.str, "INBOX") == 0 ? 1 : 0;
+		return strcmp(str, arg->value.str) == 0 ? 1 : 0;
 	case SEARCH_MAILBOX_GLOB:
 		if (imap_match(arg->initialized.mailbox_glob, box->vname) == IMAP_MATCH_YES)
 			return 1;
 		if (mail_get_special(ctx->cur_mail, MAIL_FETCH_MAILBOX_NAME,
 				     &str) < 0)
 			return -1;
-		return imap_match(arg->initialized.mailbox_glob, str) == IMAP_MATCH_YES;
+		return imap_match(arg->initialized.mailbox_glob, str) == IMAP_MATCH_YES ? 1 : 0;
 	default:
 		return -1;
 	}
@@ -333,12 +334,12 @@ static int search_arg_match_cached(struct index_search_context *ctx,
 
 		switch (arg->type) {
 		case SEARCH_BEFORE:
-			return date < arg->value.time;
+			return date < arg->value.time ? 1 : 0;
 		case SEARCH_ON:
-			return date >= arg->value.time &&
-				date < arg->value.time + 3600*24;
+			return (date >= arg->value.time &&
+				date < arg->value.time + 3600*24) ? 1 : 0;
 		case SEARCH_SINCE:
-			return date >= arg->value.time;
+			return date >= arg->value.time ? 1 : 0;
 		default:
 			/* unreachable */
 			break;
@@ -351,20 +352,20 @@ static int search_arg_match_cached(struct index_search_context *ctx,
 			return -1;
 
 		if (arg->type == SEARCH_SMALLER)
-			return virtual_size < arg->value.size;
+			return virtual_size < arg->value.size ? 1 : 0;
 		else
-			return virtual_size > arg->value.size;
+			return virtual_size > arg->value.size ? 1 : 0;
 
 	case SEARCH_GUID:
 		if (mail_get_special(ctx->cur_mail, MAIL_FETCH_GUID, &str) < 0)
 			return -1;
-		return strcmp(str, arg->value.str) == 0;
+		return strcmp(str, arg->value.str) == 0 ? 1 : 0;
 	case SEARCH_REAL_UID: {
 		struct mail *real_mail;
 
 		if (mail_get_backend_mail(ctx->cur_mail, &real_mail) < 0)
 			return -1;
-		return seq_range_exists(&arg->value.seqset, real_mail->uid);
+		return seq_range_exists(&arg->value.seqset, real_mail->uid) ? 1 : 0;
 	}
 	default:
 		return -1;
@@ -405,12 +406,12 @@ static int search_sent(enum mail_search_arg_type type, time_t search_time,
 
 	switch (type) {
 	case SEARCH_BEFORE:
-		return sent_time < search_time;
+		return sent_time < search_time ? 1 : 0;
 	case SEARCH_ON:
-		return sent_time >= search_time &&
-			sent_time < search_time + 3600*24;
+		return (sent_time >= search_time &&
+			sent_time < search_time + 3600*24) ? 1 : 0;
 	case SEARCH_SINCE:
-		return sent_time >= search_time;
+		return sent_time >= search_time ? 1 : 0;
 	default:
                 i_unreached();
 	}
@@ -713,8 +714,8 @@ static int search_arg_match_text(struct mail_search_arg *args,
 	} else if (have_headers) {
 		/* we need to read the entire header */
 		ret = have_body ?
-			mail_get_stream(ctx->cur_mail, NULL, NULL, &input) :
-			mail_get_hdr_stream(ctx->cur_mail, NULL, &input);
+			mail_get_stream_because(ctx->cur_mail, NULL, NULL, "search", &input) :
+			mail_get_hdr_stream_because(ctx->cur_mail, NULL, "search", &input);
 		if (ret < 0)
 			failed = TRUE;
 		else {
@@ -766,7 +767,7 @@ static int search_arg_match_text(struct mail_search_arg *args,
 		/* we didn't search headers. */
 		struct message_size hdr_size;
 
-		if (mail_get_stream(ctx->cur_mail, &hdr_size, NULL, &input) < 0)
+		if (mail_get_stream_because(ctx->cur_mail, &hdr_size, NULL, "search", &input) < 0)
 			return -1;
 		i_stream_seek(input, hdr_size.physical_size);
 	}
@@ -985,9 +986,6 @@ static bool search_limit_by_hdr(struct index_search_context *ctx,
 				/* UNSEEN with all seen? */
 				if (args->match_not)
 					return FALSE;
-
-				/* SEEN with all seen */
-				args->match_always = TRUE;
 			} else if (args->match_not) {
 				/* UNSEEN with lowwater limiting */
 				search_limit_lowwater(ctx,
@@ -1005,9 +1003,6 @@ static bool search_limit_by_hdr(struct index_search_context *ctx,
 				/* UNDELETED with all deleted? */
 				if (args->match_not)
 					return FALSE;
-
-				/* DELETED with all deleted */
-				args->match_always = TRUE;
 			} else if (!args->match_not) {
 				/* DELETED with lowwater limiting */
 				search_limit_lowwater(ctx,
